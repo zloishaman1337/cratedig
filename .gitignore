@@ -1,0 +1,21 @@
+# cratedig
+__pycache__/
+*.py[cod]
+.venv/
+venv/
+*.egg-info/
+build/
+dist/
+
+# runtime data
+# config.toml
+*.db
+*.sqlite
+*.sqlite3
+downloads/
+data/
+*.log
+
+# keep example's own artifacts out
+# example/yamdl/downloads/
+# example/yamdl/token.txt

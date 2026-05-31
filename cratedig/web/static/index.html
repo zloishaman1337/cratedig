@@ -1,0 +1,58 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>cratedig</title>
+  <link rel="stylesheet" href="/static/styles.css">
+</head>
+<body>
+  <main class="shell">
+    <aside class="library">
+      <header class="bar">
+        <div>
+          <h1>cratedig</h1>
+          <span id="library-count">Library</span>
+        </div>
+      </header>
+      <input id="filter" type="search" placeholder="Filter samples">
+      <nav id="tree" class="tree" aria-label="Sample library"></nav>
+    </aside>
+
+    <section class="preview">
+      <header class="sample-head">
+        <div>
+          <h2 id="sample-title">Select a sample</h2>
+          <p id="sample-path"></p>
+        </div>
+        <div id="sample-badges" class="badges"></div>
+      </header>
+
+      <div class="wave-surface">
+        <canvas id="waveform" width="1200" height="360"></canvas>
+        <div id="wave-status" class="wave-status">No sample selected</div>
+      </div>
+
+      <div class="transport">
+        <audio id="audio" controls preload="metadata"></audio>
+      </div>
+    </section>
+
+    <aside class="inspector">
+      <section>
+        <h3>Analysis</h3>
+        <dl id="analysis"></dl>
+      </section>
+      <section>
+        <h3>File</h3>
+        <dl id="file-meta"></dl>
+      </section>
+      <section>
+        <h3>Tags</h3>
+        <div id="tags" class="tags"></div>
+      </section>
+    </aside>
+  </main>
+  <script src="/static/app.js"></script>
+</body>
+</html>
