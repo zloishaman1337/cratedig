@@ -1,0 +1,63 @@
+# Copy to config.toml and edit. cratedig reads config.toml from CWD,
+# or the path in env CRATEDIG_CONFIG.
+
+[paths]
+# SQLite database file.
+db = "data/cratedig.db"
+# Where downloaders save audio.
+download_dir = "data/downloads"
+# Folders scanned for local samples (the "Library" in Sononym terms).
+library_dirs = []
+
+[audio]
+# Analysis sample rate (Hz) used for feature extraction.
+analysis_sr = 22050
+# Audio file extensions treated as samples.
+extensions = [".wav", ".aiff", ".aif", ".flac", ".mp3", ".ogg", ".m4a"]
+
+[sources]
+# Default download strategy for the legacy CLI text/URL path.
+# strategy = "combined" tries backends in `order` until one succeeds.
+# strategy = "single" uses `default` only.
+# The TUI Download mode does NOT use these — it picks per dl_mode:
+#   samples → freesound        tracks → yandex (fallback: youtube)
+strategy = "combined"
+default = "youtube"
+order = ["youtube", "yandex", "archive"]
+
+[sources.youtube]
+# yt-dlp options. audio_format passed to yt-dlp postprocessor.
+# Needs ffmpeg on PATH.
+audio_format = "wav"
+
+[sources.yandex]
+# Yandex Music via the `yandex-music` Python library (NOT the old yamdl.exe,
+# which turned out to be an interactive TUI, not a CLI).
+#
+# How to get a token (one-time):
+#   1. Log into music.yandex.ru in your browser.
+#   2. Open https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d
+#      (this is the documented yandex-music-api client_id)
+#   3. Yandex redirects to a page; copy the `access_token=...` value from the URL.
+#   4. Paste it into `token = "..."` below, OR drop it as a single line into
+#      a file and set `token_file = "path/to/token.txt"`.
+token = ""
+token_file = "example/yamdl/token.txt"
+
+[sources.freesound]
+# Sample-oriented backend. Token-only auth = HQ mp3 PREVIEW downloads
+# (sampling-grade); full originals require OAuth2 and are not implemented.
+#
+# How to get a token (one-time):
+#   1. Create an account at https://freesound.org
+#   2. https://freesound.org/apiv2/apply/  → "Create new API Credentials"
+#   3. Use the "Client secret/Api key" value as `token` below.
+token = ""
+
+[sources.archive]
+# archive.org needs no key for public items.
+
+[metadata]
+# MusicBrainz requires a descriptive User-Agent.
+musicbrainz_useragent = "cratedig/0.1 (local use)"
+discogs_token = ""

@@ -1,0 +1,54 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "cratedig"
+version = "0.1.0"
+description = "TUI sample browser + downloader + similarity search (Sononym-style fork for local use)"
+readme = "README.md"
+requires-python = ">=3.11"
+dependencies = [
+    "textual>=0.60",
+    "numpy>=1.26",
+    "soundfile>=0.12",
+    "mutagen>=1.47",
+]
+
+[project.optional-dependencies]
+# Audio analysis (BPM/key/feature vectors). Heavy; install when you want analysis.
+analysis = [
+    "librosa>=0.10",
+    "scipy>=1.11",
+]
+# Download backends.
+download = [
+    "yt-dlp>=2024.1",
+    "requests>=2.31",
+    "internetarchive>=4.0",
+    "yandex-music>=2.2",
+]
+# Metadata enrichment.
+metadata = [
+    "musicbrainzngs>=0.7",
+    "python3-discogs-client>=2.6",
+]
+# Faster similarity index for large libraries.
+index = [
+    "hnswlib>=0.8",
+]
+dev = [
+    "pytest>=8.0",
+]
+
+[project.scripts]
+cratedig = "cratedig.__main__:main"
+
+[tool.setuptools.packages.find]
+include = ["cratedig*"]
+
+[tool.setuptools.package-data]
+cratedig = ["db/schema.sql", "web/static/*"]
+
+[tool.pytest.ini_options]
+testpaths = ["tests"]

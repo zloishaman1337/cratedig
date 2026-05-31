@@ -1,0 +1,32 @@
+# Local config. See config.example.toml for documentation on every key.
+
+[paths]
+db = "data/cratedig.db"
+download_dir = "data/downloads"
+library_dirs = ["example/samples"]
+
+[audio]
+analysis_sr = 22050
+extensions = [".wav", ".aiff", ".aif", ".flac", ".mp3", ".ogg", ".m4a"]
+
+[sources]
+strategy = "combined"
+default = "youtube"
+order = ["youtube", "yandex", "archive"]
+
+[sources.youtube]
+audio_format = "wav"
+
+[sources.yandex]
+# token = ""   # paste OAuth token here, OR keep token_file below
+token_file = "example/yamdl/token.txt"
+
+[sources.freesound]
+# Paste your FreeSound APIv2 token here (see config.example.toml for how to get one).
+token = "D7zu7zgd6VFishV8O6kBPHAwK827iPpVSgliRvCW"
+
+[sources.archive]
+
+[metadata]
+musicbrainz_useragent = "cratedig/0.1 (local use)"
+discogs_token = ""
