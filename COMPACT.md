@@ -33,6 +33,9 @@ Yandex/FreeSound/Archive into the library. Python 3.11+ / Textual. Personal use.
 - yamdl.exe REMOVED — was interactive TUI binary, not a CLI subprocess.
 
 ## Gotchas
+- README updated with clone/run-on-another-machine instructions, web panel usage,
+  current TUI keys, `config.toml`/private token warning, ffmpeg/ffplay install notes,
+  and test command (`python -m pytest`).
 - ffmpeg required on PATH for YouTube extraction. Waveform decode uses ffmpeg first,
   then falls back to soundfile for formats it can decode when ffmpeg is unavailable.
 - YouTube backend falls back to native yt-dlp bestaudio when ffmpeg is unavailable

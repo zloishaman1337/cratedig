@@ -1,9 +1,10 @@
 # cratedig
 
-A local, terminal (TUI) fork of **Sononym**: index your sample library, search by
-**BPM / key / mood / tags**, find acoustically **similar** samples, and **download**
-new audio (YouTube, Yandex Music, FreeSound, Internet Archive) straight into the
-library. SQLite-backed. For personal, local use.
+A local TUI + web-panel fork of **Sononym**: index your sample library, search by
+**BPM / key / mood / tags**, find acoustically **similar** samples, **download**
+new audio (YouTube, Yandex Music, FreeSound, Internet Archive), and dive into
+samples with a browser waveform/metadata panel. SQLite-backed. For personal,
+local use.
 
 > Status: **v0.1 skeleton + working local-scan slice.** Scan → analyze → browse →
 > search → similarity works end-to-end. Download backends + metadata are wired but
@@ -19,8 +20,9 @@ pip install -e ".[analysis]"           # + librosa: BPM/key/similarity
 pip install -e ".[download,metadata]"  # + downloaders + MusicBrainz/Discogs
 ```
 
-`ffmpeg` must be on PATH for YouTube audio extraction and waveform rendering.
+`ffmpeg` must be on PATH for YouTube audio extraction and best waveform decoding.
 Without `ffmpeg`, YouTube downloads fall back to yt-dlp's native bestaudio file.
+Waveform rendering falls back to `soundfile` for formats it can decode.
 `ffplay` must be on PATH for TUI playback.
 
 ## Configure
@@ -30,11 +32,14 @@ copy config.example.toml config.toml
 ```
 
 Edit `config.toml` — set `library_dirs`, `download_dir`, and any API tokens.
+Do not commit your local `config.toml` if it contains tokens or machine-specific
+paths; keep `config.example.toml` as the shareable template.
 
 ## Use
 
 ```powershell
 cratedig                 # launch the TUI
+cratedig web             # launch the local web sample-diving panel
 cratedig scan            # index library_dirs (headless)
 cratedig classify        # fill missing categories from filenames/paths
 cratedig analyze         # compute BPM/key/feature vectors (needs librosa)
@@ -51,9 +56,17 @@ cratedig download "<url>" --url --source youtube
 | `c` | classify missing categories |
 | `f` | find similar to selected row |
 | `u` | show duplicate files grouped by file hash |
+| `t` | reload the path-based library tree |
 | arrows / click | preview the highlighted sample or download hit (uses `ffplay`) |
 | `p` | play / stop the selected sample, or preview the selected download hit |
-| `w` | render waveform preview for the selected sample (uses `ffmpeg`) |
+| `w` | render the interactive terminal waveform for the selected sample |
+| `v` | open/sync the selected sample in the local web panel |
+| `z` / `o` | waveform zoom in / out |
+| `h` / `l` | waveform pan left / right |
+| `j` / `k` | move waveform playhead left / right |
+| `b` / `e` | mark waveform selection start / end |
+| `g` | loop selected waveform region |
+| `y` | clear waveform selection |
 | `x` | stop playback |
 | `r` | refresh / clear search |
 | `d` | toggle Download mode |
@@ -79,14 +92,62 @@ Scan, analyze, classify, download, and waveform operations show live progress/st
 multi-line TUI operation panel. Download and waveform jobs can run while analyze
 is running; scan and analyze are intentionally mutually exclusive.
 
+### Web panel
+
+```powershell
+cratedig web
+```
+
+The web panel opens at `http://127.0.0.1:8765` by default. It shows a path-based
+library tree, Canvas stereo waveform, browser audio controls, file metadata,
+tags, and analysis fields. In the TUI, press `v` on a selected sample to open the
+same panel directly at `/?sample=<id>`.
+
+## Clone on another machine
+
+```powershell
+git clone https://github.com/<your-user>/Sononym_fork.git
+cd Sononym_fork
+
+py -3.11 -m venv .venv
+.\.venv\Scripts\Activate.ps1
+
+python -m pip install -U pip
+pip install -e ".[dev,analysis,download,metadata]"
+copy config.example.toml config.toml
+notepad config.toml
+```
+
+Set `library_dirs`, `download_dir`, and tokens in the new machine's local
+`config.toml`, then run:
+
+```powershell
+cratedig scan
+cratedig analyze
+cratedig
+cratedig web
+```
+
+Recommended Windows tools:
+
+```powershell
+winget install --id Gyan.FFmpeg --source winget
+ffmpeg -version
+ffplay -version
+```
+
+Large/local artifacts such as `.venv/`, `data/`, SQLite DBs, downloaded audio,
+and private tokens should stay out of git unless you intentionally choose
+otherwise.
+
 ## Layout
 
 See [ARCHITECTURE.md](ARCHITECTURE.md). Source under `cratedig/`:
-`db/` · `scan/` · `audio/` · `search/` · `sources/` · `metadata/` · `tui/`.
+`db/` · `scan/` · `audio/` · `search/` · `sources/` · `metadata/` · `tui/` · `web/`.
 
 ## Tests
 
 ```powershell
 pip install -e ".[dev]"
-pytest
+python -m pytest
 ```
