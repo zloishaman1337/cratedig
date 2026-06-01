@@ -11,27 +11,28 @@ the UI stays responsive.
 
 from __future__ import annotations
 
-import webbrowser
 from pathlib import Path
 
 from textual import work
 from textual.app import App, ComposeResult
-from textual.containers import Vertical
-from textual.widgets import DataTable, Footer, Header, Input, Static
+from textual.containers import Horizontal, Vertical
+from textual.widgets import DataTable, Footer, Header, Input, Static, Tree
+from textual.widgets.tree import TreeNode
 
 from ..config import Config
-from ..audio.playback import AudioPlayer, WaveformData, decode_waveform_data, render_waveform_panel
+from ..audio.playback import AudioPlayer
 from ..db import Database
 from ..db.models import Sample
 from .. import index as indexer
 from ..search import SearchFilter, run_search
 from ..sources import DownloadManager, SearchHit
-from ..web.server import ensure_web_server, sample_url
+from .browser import FolderNode, build_folder_tree
 from .status import OPERATION_ORDER, format_operations, progress_label
 
-COLUMNS = ("id", "filename", "cat", "bpm", "key", "dur(s)", "src")
+COLUMNS = ("id", "filename", "wave", "cat", "bpm", "key", "dur(s)", "src")
 DL_COLUMNS = ("#", "title", "artist", "dur(s)", "src")
 DUP_COLUMNS = ("hash", "id", "filename", "cat", "dur(s)", "src", "path")
+WAVE_PLACEHOLDER = " " * 28
 
 
 def _row(s: Sample) -> tuple:
@@ -39,6 +40,7 @@ def _row(s: Sample) -> tuple:
     return (
         str(s.id),
         s.filename[:48],
+        s.waveform_preview or WAVE_PLACEHOLDER,
         s.category or "-",
         f"{s.bpm:.0f}" if s.bpm else "-",
         key,
@@ -70,13 +72,13 @@ def _tree_rows(samples: list[Sample], roots: tuple[Path, ...]) -> list[tuple[str
             break
         folder_key = (root_label,)
         if folder_key not in seen_folders:
-            rows.append((f"folder:{root_label}", ("", f"▾ {root_label}", "", "", "", "", "")))
+            rows.append((f"folder:{root_label}", ("", f"▾ {root_label}", "", "", "", "", "", "")))
             seen_folders.add(folder_key)
         for depth, part in enumerate(rel_parts[:-1], start=1):
             folder_key = (root_label, *rel_parts[:depth])
             if folder_key in seen_folders:
                 continue
-            rows.append((f"folder:{'/'.join(folder_key)}", ("", f"{'  ' * depth}▾ {part}", "", "", "", "", "")))
+            rows.append((f"folder:{'/'.join(folder_key)}", ("", f"{'  ' * depth}▾ {part}", "", "", "", "", "", "")))
             seen_folders.add(folder_key)
 
         key = str(sample.id)
@@ -100,11 +102,16 @@ def _dup_row(s: Sample) -> tuple:
 class CratedigApp(App):
     CSS = """
     #search { dock: top; height: 3; }
-    #waveform { dock: bottom; height: 13; color: $accent; }
     #operation { height: 5; color: $warning; }
     #status { dock: bottom; height: 1; color: $text-muted; }
     #mode_hint { dock: bottom; height: 1; color: $accent; }
     DataTable { height: 1fr; }
+    #browse_container { height: 1fr; }
+    #folder_tree { width: 30; border-right: solid $panel; }
+    #contents_panel { width: 1fr; }
+    #breadcrumb { height: 1; color: $text-muted; padding: 0 1; }
+    #contents { height: 1fr; }
+    #results { height: 1fr; }
     """
 
     BINDINGS = [
@@ -115,23 +122,12 @@ class CratedigApp(App):
         ("u", "duplicates", "Duplicates"),
         ("t", "library_tree", "Library"),
         ("p", "play", "Play/stop"),
-        ("w", "waveform", "Waveform"),
-        ("v", "web_panel", "Web"),
-        ("z", "waveform_zoom_in", "Zoom+"),
-        ("o", "waveform_zoom_out", "Zoom-"),
-        ("h", "waveform_pan_left", "Pan left"),
-        ("l", "waveform_pan_right", "Pan right"),
-        ("j", "waveform_playhead_left", "Head left"),
-        ("k", "waveform_playhead_right", "Head right"),
-        ("b", "waveform_mark_start", "Sel start"),
-        ("e", "waveform_mark_end", "Sel end"),
-        ("g", "waveform_loop", "Loop sel"),
-        ("y", "waveform_clear_selection", "Clear sel"),
         ("x", "stop", "Stop"),
         ("r", "refresh", "Refresh"),
         ("d", "toggle_download", "Download mode"),
         ("1", "set_mode_samples", "samples"),
         ("2", "set_mode_tracks", "tracks"),
+        ("b", "toggle_favorite", "Fav"),
         ("q", "quit", "Quit"),
     ]
 
@@ -145,31 +141,37 @@ class CratedigApp(App):
         self.hits: list[SearchHit] = []
         self.player = AudioPlayer()
         self.last_preview_target: str | None = None
-        self.waveform: WaveformData | None = None
-        self.waveform_path: str | None = None
-        self.waveform_filename: str | None = None
-        self.waveform_zoom: float = 1.0
-        self.waveform_offset: float = 0.0
-        self.waveform_playhead: float = 0.0
-        self.waveform_selection: tuple[float, float] | None = None
         self.operations: dict[str, str] = {name: "idle" for name in OPERATION_ORDER}
         self.library_operation: str | None = None
         self.browse_view: str = "library"    # library | duplicates
+        self._folder_nodes: dict[str, FolderNode] = {}
+        self._selected_folder_key: str | None = None
 
     def compose(self) -> ComposeResult:
         yield Header(show_clock=True)
         with Vertical():
             yield Input(placeholder="search filename… (Enter)", id="search")
+            # Browse view: collapsible folder tree + contents table
+            with Horizontal(id="browse_container"):
+                yield Tree("Library", id="folder_tree")
+                with Vertical(id="contents_panel"):
+                    yield Static("", id="breadcrumb")
+                    yield DataTable(id="contents", cursor_type="row", zebra_stripes=True)
+            # Download / duplicates view: flat results table
             yield DataTable(id="results", cursor_type="row", zebra_stripes=True)
             yield Static(format_operations(self.operations), id="operation")
-        yield Static("", id="waveform")
         yield Static("", id="mode_hint")
         yield Static("", id="status")
         yield Footer()
 
     def on_mount(self) -> None:
-        table = self.query_one("#results", DataTable)
-        table.add_columns(*COLUMNS)
+        results = self.query_one("#results", DataTable)
+        results.add_columns(*COLUMNS)
+        results.display = False
+
+        contents = self.query_one("#contents", DataTable)
+        contents.add_columns(*COLUMNS)
+
         self._refresh_mode_hint()
         self.refresh_results()
 
@@ -177,7 +179,9 @@ class CratedigApp(App):
     def _refresh_mode_hint(self) -> None:
         hint = self.query_one("#mode_hint", Static)
         if self.mode == "browse":
-            hint.update("[browse]  arrows/click=preview  t=library  p=play  w=waveform  v=web  z/o=zoom  h/l=pan  j/k=head  b/e=sel  g=loop  y=clear  x=stop  d=download  q=quit")
+            hint.update(
+                "[browse]  arrows/enter=expand  t=library  p=play  b=fav  x=stop  d=download  q=quit"
+            )
         else:
             avail = self.dm.available_backends()
             badge = " ".join(f"{n}{'✓' if ok else '✗'}" for n, ok in avail.items())
@@ -192,45 +196,88 @@ class CratedigApp(App):
         self.operations[name] = msg
         self.query_one("#operation", Static).update(format_operations(self.operations))
 
-    def _set_waveform(self, msg: str) -> None:
-        self.query_one("#waveform", Static).update(msg)
+    # --- browse tree ----------------------------------------------------------
+    def _rebuild_folder_tree(self, samples: list[Sample] | None = None) -> None:
+        """Rebuild the Tree widget from the current library samples."""
+        if samples is None:
+            samples = self.db.all_samples(limit=20000)
 
-    def _waveform_visible_seconds(self) -> float:
-        if self.waveform is None:
-            return 0.0
-        return self.waveform.duration_sec / max(1.0, self.waveform_zoom)
+        self._folder_nodes = build_folder_tree(samples, self.cfg.paths.library_dirs)
 
-    def _render_waveform_view(self) -> None:
-        if self.waveform is None:
-            return
-        width = max(20, min(140, self.size.width - 4))
-        selection = self.waveform_selection
-        body = render_waveform_panel(
-            self.waveform,
-            width=width,
-            lane_height=5,
-            zoom=self.waveform_zoom,
-            offset=self.waveform_offset,
-            playhead_sec=self.waveform_playhead,
-            selection=selection,
+        tree = self.query_one("#folder_tree", Tree)
+        tree.clear()
+        tree.root.expand()
+
+        # Favorites branch at the top
+        fav_folders = [f["ref"] for f in self.db.list_favorites("folder")]
+        fav_samples_rows = self.db.list_favorites("sample")
+        if fav_folders or fav_samples_rows:
+            fav_branch = tree.root.add("★ Favorites", expand=True)
+            for fk in fav_folders:
+                fav_branch.add_leaf(fk, data={"type": "fav_folder", "key": fk})
+            for row in fav_samples_rows:
+                try:
+                    sid = int(row["ref"])
+                except (ValueError, KeyError):
+                    continue
+                s = self.db.get_sample(sid)
+                if s is not None:
+                    fav_branch.add_leaf(f"★ {s.filename[:40]}", data={"type": "fav_sample", "sample_id": sid})
+
+        # Folder hierarchy
+        def _add_node(parent: TreeNode, node: FolderNode) -> None:
+            child_folders = sorted(node.children.values(), key=lambda n: n.name.lower())
+            if child_folders:
+                branch = parent.add(node.name, data={"type": "folder", "key": node.key})
+                for child in child_folders:
+                    _add_node(branch, child)
+            else:
+                parent.add_leaf(node.name, data={"type": "folder", "key": node.key})
+
+        root_nodes = sorted(
+            (n for n in self._folder_nodes.values() if n.parent_key is None),
+            key=lambda n: n.name.lower(),
         )
-        sel = ""
-        if selection:
-            a, b = sorted(selection)
-            sel = f"  sel {a:.2f}-{b:.2f}s"
-        title = f"{(self.waveform_filename or 'waveform')[:48]}  head {self.waveform_playhead:.2f}s{sel}"
-        self._set_waveform(f"{title}\n{body}")
+        for rn in root_nodes:
+            _add_node(tree.root, rn)
 
-    def _has_waveform_for_selected_sample(self, sample: Sample | None) -> bool:
-        return bool(sample and self.waveform is not None and self.waveform_path == sample.path)
+    def _load_folder_contents(self, folder_key: str) -> None:
+        """Populate the contents DataTable with direct samples of folder_key."""
+        self._selected_folder_key = folder_key
+        self.query_one("#breadcrumb", Static).update(folder_key)
+        self.db.touch_recent_folder(folder_key)
+
+        node = self._folder_nodes.get(folder_key)
+        samples = node.samples if node else []
+
+        contents = self.query_one("#contents", DataTable)
+        contents.clear(columns=True)
+        contents.add_columns(*COLUMNS)
+        for s in sorted(samples, key=lambda x: x.filename.lower()):
+            contents.add_row(*_row(s), key=str(s.id))
+
+        self._set_status(f"{folder_key} · {len(samples)} sample(s)")
+
+    def _refresh_favorites_branch(self) -> None:
+        """Rebuild the entire tree (simplest way to refresh favorites)."""
+        self._rebuild_folder_tree()
 
     # --- data (browse) --------------------------------------------------------
     def refresh_results(self, samples: list[Sample] | None = None) -> None:
+        self.browse_view = "library"
+
+        if self.mode == "browse":
+            self._rebuild_folder_tree(samples)
+            total = self.db.count_samples()
+            shown = len(samples) if samples is not None else total
+            self._set_status(f"{shown} shown · {total} indexed")
+            return
+
+        # Non-browse mode: use flat #results table
         table = self.query_one("#results", DataTable)
         table.clear(columns=True)
         table.add_columns(*COLUMNS)
         rows = samples if samples is not None else self.db.all_samples(limit=20000)
-        self.browse_view = "library"
         if samples is None:
             for key, row in _tree_rows(rows, self.cfg.paths.library_dirs):
                 table.add_row(*row, key=key)
@@ -251,7 +298,13 @@ class CratedigApp(App):
         self._set_status(f"{len(rows)} duplicate files across {groups} hash groups · r=library")
 
     def _selected_id(self) -> int | None:
-        table = self.query_one("#results", DataTable)
+        """Return selected sample id from whichever table is active."""
+        # Browse-library shows the #contents table; duplicates and download
+        # both live in the flat #results table.
+        if self.mode == "browse" and self.browse_view != "duplicates":
+            table = self.query_one("#contents", DataTable)
+        else:
+            table = self.query_one("#results", DataTable)
         if table.row_count == 0:
             return None
         try:
@@ -308,6 +361,15 @@ class CratedigApp(App):
         self.last_preview_target = target
         self._set_status(status)
 
+    # --- widget display toggling ----------------------------------------------
+    def _show_browse_widgets(self) -> None:
+        self.query_one("#browse_container").display = True
+        self.query_one("#results").display = False
+
+    def _show_results_widget(self) -> None:
+        self.query_one("#browse_container").display = False
+        self.query_one("#results").display = True
+
     # --- events ---------------------------------------------------------------
     def on_input_submitted(self, event: Input.Submitted) -> None:
         text = event.value.strip()
@@ -321,13 +383,34 @@ class CratedigApp(App):
             self._set_status(f"searching {self.dl_mode}…")
             self._do_search(text)
 
+    def on_tree_node_selected(self, event: Tree.NodeSelected) -> None:
+        if self.mode != "browse":
+            return
+        data = event.node.data
+        if data is None:
+            return
+        node_type = data.get("type")
+        if node_type == "folder":
+            self._load_folder_contents(data["key"])
+        elif node_type == "fav_folder":
+            fk = data["key"]
+            if fk in self._folder_nodes:
+                self._load_folder_contents(fk)
+            else:
+                self._set_status(f"folder not found: {fk}")
+        elif node_type == "fav_sample":
+            sample = self.db.get_sample(data["sample_id"])
+            self._preview_sample(sample)
+
     def on_data_table_row_selected(self, event: DataTable.RowSelected) -> None:
         if self.mode != "download" or not self.hits:
             return
         self.action_download_selected()
 
     def on_data_table_row_highlighted(self, event: DataTable.RowHighlighted) -> None:
-        if self.mode == "download":
+        if event.data_table.id == "contents":
+            self._preview_sample(self._selected_sample())
+        elif self.mode == "download":
             self._preview_hit(self._selected_hit())
         else:
             self._preview_sample(self._selected_sample())
@@ -393,12 +476,14 @@ class CratedigApp(App):
         if self.mode != "browse":
             self._set_status("press d to leave download mode first")
             return
+        self._show_results_widget()
         self.show_duplicates()
 
     def action_library_tree(self) -> None:
         if self.mode != "browse":
             self._set_status("press d to leave download mode first")
             return
+        self._show_browse_widgets()
         self.refresh_results()
 
     def action_play(self) -> None:
@@ -414,15 +499,6 @@ class CratedigApp(App):
             self.player.stop()
             self._set_status("stopped " + sample.filename[:60])
             return
-        if self._has_waveform_for_selected_sample(sample):
-            try:
-                self.player.play(target, start_sec=self.waveform_playhead)
-            except RuntimeError as e:
-                self._set_status(str(e))
-                return
-            self.last_preview_target = target
-            self._set_status(f"playing {sample.filename[:50]} from {self.waveform_playhead:.2f}s")
-            return
         self._preview_sample(sample)
 
     def action_stop(self) -> None:
@@ -430,131 +506,48 @@ class CratedigApp(App):
         self.last_preview_target = None
         self._set_status("playback stopped")
 
-    def action_waveform(self) -> None:
+    def action_toggle_favorite(self) -> None:
         if self.mode != "browse":
-            self._set_status("press d to leave download mode first")
             return
-        sample = self._selected_sample()
-        if sample is None:
-            self._set_status("select a row first")
-            return
-        width = max(20, min(120, self.size.width - 2))
-        self._set_status(f"rendering waveform for {sample.filename[:50]}…")
-        self._set_operation("waveform", f"rendering {sample.filename[:40]}")
-        self._do_waveform(sample.path, sample.filename, sample.channels or 2, width)
+        # Check if a folder is highlighted in the tree
+        tree = self.query_one("#folder_tree", Tree)
+        node = tree.cursor_node
+        if node is not None and node.data is not None:
+            node_type = node.data.get("type")
+            if node_type == "folder":
+                fk = node.data["key"]
+                if self.db.is_favorite("folder", fk):
+                    self.db.remove_favorite("folder", fk)
+                    self._set_status(f"removed folder favorite: {fk}")
+                else:
+                    self.db.add_favorite("folder", fk)
+                    self._set_status(f"added folder favorite: {fk}")
+                self._refresh_favorites_branch()
+                return
 
-    def action_web_panel(self) -> None:
-        if self.mode != "browse":
-            self._set_status("press d to leave download mode first")
+        # Otherwise try selected sample in contents table
+        sid = self._selected_id()
+        if sid is None:
+            self._set_status("select a sample or folder first")
             return
-        sample = self._selected_sample()
-        try:
-            base_url = ensure_web_server(self.cfg)
-        except OSError as e:
-            self._set_status(f"web panel failed: {e}")
-            return
-        url = sample_url(base_url, sample.id if sample and sample.id is not None else None)
-        webbrowser.open(url)
-        if sample:
-            self._set_status(f"opened web panel for {sample.filename[:50]}")
+        ref = str(sid)
+        if self.db.is_favorite("sample", ref):
+            self.db.remove_favorite("sample", ref)
+            self._set_status(f"removed sample favorite: #{sid}")
         else:
-            self._set_status("opened web panel")
-
-    def action_waveform_zoom_in(self) -> None:
-        if self.waveform is None:
-            return
-        self.waveform_zoom = min(64.0, self.waveform_zoom * 2.0)
-        self._render_waveform_view()
-        self._set_status(f"waveform zoom {self.waveform_zoom:.1f}x")
-
-    def action_waveform_zoom_out(self) -> None:
-        if self.waveform is None:
-            return
-        self.waveform_zoom = max(1.0, self.waveform_zoom / 2.0)
-        if self.waveform_zoom == 1.0:
-            self.waveform_offset = 0.0
-        self._render_waveform_view()
-        self._set_status(f"waveform zoom {self.waveform_zoom:.1f}x")
-
-    def action_waveform_pan_left(self) -> None:
-        self._pan_waveform(-0.15)
-
-    def action_waveform_pan_right(self) -> None:
-        self._pan_waveform(0.15)
-
-    def _pan_waveform(self, delta: float) -> None:
-        if self.waveform is None:
-            return
-        self.waveform_offset = max(0.0, min(1.0, self.waveform_offset + delta))
-        self._render_waveform_view()
-
-    def action_waveform_playhead_left(self) -> None:
-        self._move_waveform_playhead(-0.1)
-
-    def action_waveform_playhead_right(self) -> None:
-        self._move_waveform_playhead(0.1)
-
-    def _move_waveform_playhead(self, visible_fraction: float) -> None:
-        if self.waveform is None:
-            return
-        step = max(0.05, self._waveform_visible_seconds() * abs(visible_fraction))
-        if visible_fraction < 0:
-            step = -step
-        self.waveform_playhead = max(0.0, min(self.waveform.duration_sec, self.waveform_playhead + step))
-        if self.waveform.duration_sec > 0:
-            visible = 1.0 / max(1.0, self.waveform_zoom)
-            ratio = self.waveform_playhead / self.waveform.duration_sec
-            if ratio < self.waveform_offset:
-                self.waveform_offset = max(0.0, ratio)
-            elif ratio > self.waveform_offset + visible:
-                self.waveform_offset = min(1.0, ratio - visible)
-        self._render_waveform_view()
-        self._set_status(f"playhead {self.waveform_playhead:.2f}s")
-
-    def action_waveform_mark_start(self) -> None:
-        if self.waveform is None:
-            return
-        _, end = self.waveform_selection or (self.waveform_playhead, self.waveform_playhead)
-        self.waveform_selection = (self.waveform_playhead, end)
-        self._render_waveform_view()
-
-    def action_waveform_mark_end(self) -> None:
-        if self.waveform is None:
-            return
-        start, _ = self.waveform_selection or (self.waveform_playhead, self.waveform_playhead)
-        self.waveform_selection = (start, self.waveform_playhead)
-        self._render_waveform_view()
-
-    def action_waveform_clear_selection(self) -> None:
-        self.waveform_selection = None
-        self._render_waveform_view()
-        self._set_status("waveform selection cleared")
-
-    def action_waveform_loop(self) -> None:
-        sample = self._selected_sample()
-        if not self._has_waveform_for_selected_sample(sample) or not self.waveform_selection:
-            self._set_status("load waveform and mark b/e first")
-            return
-        assert sample is not None
-        start, end = sorted(self.waveform_selection)
-        if end - start < 0.05:
-            self._set_status("selection is too short to loop")
-            return
-        try:
-            self.player.play(sample.path, start_sec=start, duration_sec=end - start, loop=True)
-        except RuntimeError as e:
-            self._set_status(str(e))
-            return
-        self.last_preview_target = sample.path
-        self._set_status(f"looping {sample.filename[:40]} {start:.2f}-{end:.2f}s")
+            self.db.add_favorite("sample", ref)
+            self._set_status(f"added sample favorite: #{sid}")
+        self._refresh_favorites_branch()
 
     # --- actions (download mode) ----------------------------------------------
     def action_toggle_download(self) -> None:
         self.mode = "download" if self.mode == "browse" else "browse"
         if self.mode == "browse":
+            self._show_browse_widgets()
             self.refresh_results()
             self.query_one("#search", Input).placeholder = "search filename… (Enter)"
         else:
+            self._show_results_widget()
             self._show_hits([])
             self.query_one("#search", Input).placeholder = (
                 f"search {self.dl_mode}… (Enter)"
@@ -663,21 +656,11 @@ class CratedigApp(App):
             msg = f"download failed: {type(e).__name__}: {e}"
         self.call_from_thread(self._after_download, msg)
 
-    @work(thread=True, group="waveform", exclusive=True, exit_on_error=False)
-    def _do_waveform(self, path: str, filename: str, channels: int, width: int) -> None:
-        try:
-            wave = decode_waveform_data(path, bins=max(2048, width * 64), channels=channels)
-            msg = wave
-            status = "waveform ready"
-        except RuntimeError as e:
-            msg = None
-            status = str(e)
-        self.call_from_thread(self._after_waveform, msg, status, path, filename)
-
     # --- after-callbacks ------------------------------------------------------
     def _after_library_work(self, name: str, msg: str) -> None:
         self.library_operation = None
-        if self.mode == "browse":
+        if self.mode == "browse" and self.browse_view != "duplicates":
+            self._show_browse_widgets()
             self.refresh_results()
         self._set_operation(name, msg)
         self._set_status(msg)
@@ -692,21 +675,6 @@ class CratedigApp(App):
     def _after_download(self, msg: str) -> None:
         self._set_operation("download", msg)
         self._set_status(msg)
-
-    def _after_waveform(self, msg: WaveformData | None, status: str, path: str, filename: str) -> None:
-        if msg is not None:
-            self.waveform = msg
-            self.waveform_path = path
-            self.waveform_filename = filename
-            self.waveform_zoom = 1.0
-            self.waveform_offset = 0.0
-            self.waveform_playhead = 0.0
-            self.waveform_selection = None
-            self._render_waveform_view()
-        else:
-            self._set_waveform("")
-        self._set_operation("waveform", status)
-        self._set_status(status)
 
     def on_unmount(self) -> None:
         self.player.stop()

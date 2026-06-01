@@ -16,6 +16,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# Desktop GUI (PySide6).
+gui = [
+    "PySide6>=6.6",
+]
 # Audio analysis (BPM/key/feature vectors). Heavy; install when you want analysis.
 analysis = [
     "librosa>=0.10",
@@ -48,7 +52,7 @@ cratedig = "cratedig.__main__:main"
 include = ["cratedig*"]
 
 [tool.setuptools.package-data]
-cratedig = ["db/schema.sql", "web/static/*"]
+cratedig = ["db/schema.sql"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

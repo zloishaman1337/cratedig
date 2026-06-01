@@ -13,6 +13,7 @@ from typing import Callable
 from .config import Config
 from .db import Database
 from .audio.category import classify_category
+from .audio.features import FEATURE_DIM
 from .audio.similarity import cosine_topk
 from .scan import scan_directory
 
@@ -38,7 +39,10 @@ def analyze_pending(
 
     with db.lock:
         rows = db.conn.execute(
-            "SELECT id, path FROM samples WHERE feature_vector IS NULL"
+            "SELECT id, path FROM samples "
+            "WHERE feature_vector IS NULL OR feature_dim IS NULL OR feature_dim != ? "
+            "OR waveform_preview IS NULL",
+            (FEATURE_DIM,),
         ).fetchall()
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     done = 0
@@ -50,9 +54,10 @@ def analyze_pending(
         with db.lock:
             db.conn.execute(
                 "UPDATE samples SET bpm=?, musical_key=?, key_scale=?, loudness_lufs=?, "
-                "feature_vector=?, feature_dim=?, analyzed_at=? WHERE id=?",
+                "waveform_preview=?, feature_vector=?, feature_dim=?, analyzed_at=? WHERE id=?",
                 (
                     d.bpm, d.musical_key, d.key_scale, d.loudness_lufs,
+                    d.waveform_preview,
                     d.vector.astype("float32").tobytes() if d.vector is not None else None,
                     int(d.vector.shape[0]) if d.vector is not None else None,
                     now, sid,

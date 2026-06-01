@@ -28,6 +28,7 @@ CREATE TABLE IF NOT EXISTS samples (
     loudness_lufs REAL,
     category      TEXT,                            -- drum/bass/synth/vocal/... (future auto-classify)
     mood          TEXT,
+    waveform_preview TEXT,                         -- compact TUI row preview
 
     -- feature vector for similarity (float32 little-endian blob) + dim for sanity
     feature_vector BLOB,
@@ -82,4 +83,18 @@ CREATE TABLE IF NOT EXISTS metadata (
     raw_json   TEXT,
     fetched_at TEXT NOT NULL,
     UNIQUE(sample_id, provider)
+);
+
+CREATE TABLE IF NOT EXISTS favorites (
+    id         INTEGER PRIMARY KEY,
+    kind       TEXT NOT NULL,
+    ref        TEXT NOT NULL,
+    created_at TEXT NOT NULL,
+    UNIQUE(kind, ref)
+);
+
+CREATE TABLE IF NOT EXISTS recent_folders (
+    path      TEXT PRIMARY KEY,
+    opened_at TEXT NOT NULL,
+    seq       INTEGER NOT NULL
 );

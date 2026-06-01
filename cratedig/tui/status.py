@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-OPERATION_ORDER = ("scan", "analyze", "classify", "download", "waveform")
+OPERATION_ORDER = ("scan", "analyze", "classify", "download")
 
 
 def progress_label(name: str, done: int | None = None, total: int | None = None, detail: str = "") -> str:

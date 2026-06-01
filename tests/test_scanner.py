@@ -1,6 +1,7 @@
 import wave
 
 from cratedig.db import Database
+from cratedig.db.models import Sample
 from cratedig.scan import scan_directory
 
 
@@ -31,4 +32,49 @@ def test_scan_indexes_wav(tmp_path):
     assert s.format == "wav"
     assert s.file_hash and len(s.file_hash) == 40
     assert {sample.category for sample in db.all_samples()} == {"kick", None}
+    db.close()
+
+
+def test_scan_prunes_deleted_local_files(tmp_path):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    keep = lib / "keep.wav"
+    gone = lib / "gone.wav"
+    _write_wav(keep)
+    _write_wav(gone)
+
+    db = Database(tmp_path / "s.db")
+    assert scan_directory(db, lib, extensions=(".wav",)) == 2
+    gone.unlink()
+
+    assert scan_directory(db, lib, extensions=(".wav",)) == 0
+    samples = db.all_samples()
+    assert db.count_samples() == 1
+    assert samples[0].path == str(keep.resolve())
+    db.close()
+
+
+def test_scan_prunes_deleted_files_under_root_regardless_of_source(tmp_path):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    gone = lib / "gone.wav"
+    outside = tmp_path / "outside.wav"
+    _write_wav(gone)
+    _write_wav(outside)
+
+    db = Database(tmp_path / "s.db")
+    assert scan_directory(db, lib, extensions=(".wav",), source="freesound") == 1
+    db.upsert_sample(Sample(
+        id=None,
+        path=str(outside.resolve()),
+        filename=outside.name,
+        source="freesound",
+        created_at="now",
+    ))
+    gone.unlink()
+
+    assert scan_directory(db, lib, extensions=(".wav",)) == 0
+    samples = db.all_samples()
+    assert db.count_samples() == 1
+    assert samples[0].path == str(outside.resolve())
     db.close()

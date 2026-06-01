@@ -97,13 +97,16 @@ def scan_directory(
 ) -> int:
     """Index every audio file under `root`. Returns count of files processed.
 
-    Existing paths are skipped (cheap re-scan). `progress(path, n)` is called per
-    file if provided.
+    Existing paths are skipped (cheap re-scan). Missing rows under `root` are
+    pruned so deleted files disappear from the database on the next scan.
+    `progress(path, n)` is called per newly indexed file if provided.
     """
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     count = 0
+    seen_paths: set[str] = set()
     for fp in iter_audio_files(root, extensions):
         spath = str(fp.resolve())
+        seen_paths.add(spath)
         if db.path_exists(spath):
             continue
         meta = probe_file(fp)
@@ -125,4 +128,5 @@ def scan_directory(
         count += 1
         if progress:
             progress(fp, count)
+    db.prune_missing_samples(root, seen_paths)
     return count

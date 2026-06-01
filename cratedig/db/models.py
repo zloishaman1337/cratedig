@@ -23,6 +23,7 @@ class Sample:
     loudness_lufs: float | None = None
     category: str | None = None
     mood: str | None = None
+    waveform_preview: str | None = None
     feature_dim: int | None = None
     analyzed_at: str | None = None
     created_at: str | None = None

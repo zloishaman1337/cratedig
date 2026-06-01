@@ -12,6 +12,7 @@ import warnings
 import numpy as np
 
 from .features import extract_features
+from .playback import render_waveform
 
 # Krumhansl-Schmuckler key profiles (major / minor), correlated against the
 # averaged chroma to estimate musical key.
@@ -26,6 +27,7 @@ class Descriptors:
     musical_key: str | None = None
     key_scale: str | None = None
     loudness_lufs: float | None = None
+    waveform_preview: str | None = None
     vector: np.ndarray | None = None
 
 
@@ -63,6 +65,7 @@ def analyze(path: str, sr: int = 22050) -> Descriptors:
         return d
     if y.size == 0:
         return d
+    d.waveform_preview = render_waveform(y, width=28)
 
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=r"n_fft=.*too large.*")

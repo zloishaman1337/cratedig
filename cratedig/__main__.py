@@ -15,14 +15,10 @@ def main(argv: list[str] | None = None) -> int:
     sub = parser.add_subparsers(dest="cmd")
 
     sub.add_parser("tui", help="launch the TUI (default)")
+    sub.add_parser("gui", help="launch the desktop GUI (requires cratedig[gui])")
     sub.add_parser("scan", help="scan library_dirs and index files")
     sub.add_parser("analyze", help="compute descriptors for unanalyzed samples")
     sub.add_parser("classify", help="fill missing sample categories")
-    web = sub.add_parser("web", help="launch the local web sample panel")
-    web.add_argument("--host", default="127.0.0.1")
-    web.add_argument("--port", type=int, default=8765)
-    web.add_argument("--no-open", action="store_true", help="do not open a browser tab")
-    web.add_argument("--sample-id", type=int, help="open a specific sample")
 
     dl = sub.add_parser("download", help="download audio by query or URL")
     dl.add_argument("query")
@@ -31,6 +27,14 @@ def main(argv: list[str] | None = None) -> int:
 
     args = parser.parse_args(argv)
     cfg = load_config(args.config)
+
+    if args.cmd == "gui":
+        try:
+            from .gui import run_gui
+        except ImportError as exc:
+            print(f"PySide6 is required for the GUI. Install it with: pip install 'cratedig[gui]'\n({exc})", file=sys.stderr)
+            return 1
+        return run_gui(cfg)
 
     if args.cmd in (None, "tui"):
         from .tui import CratedigApp
@@ -60,18 +64,6 @@ def main(argv: list[str] | None = None) -> int:
         with Database(cfg.paths.db) as db:
             n = indexer.classify_pending(db, progress=lambda d, t: print(f"{d}/{t}"))
             print(f"classified {n} files")
-        return 0
-
-    if args.cmd == "web":
-        from .web import run_web
-
-        run_web(
-            cfg,
-            host=args.host,
-            port=args.port,
-            open_browser=not args.no_open,
-            sample_id=args.sample_id,
-        )
         return 0
 
     if args.cmd == "download":

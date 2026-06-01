@@ -18,6 +18,7 @@ python -m venv .venv
 pip install -e .                       # core: TUI + scan + search
 pip install -e ".[analysis]"           # + librosa: BPM/key/similarity
 pip install -e ".[download,metadata]"  # + downloaders + MusicBrainz/Discogs
+pip install -e ".[gui]"                # + PySide6: desktop GUI (optional)
 ```
 
 `ffmpeg` must be on PATH for YouTube audio extraction and best waveform decoding.
@@ -39,6 +40,7 @@ paths; keep `config.example.toml` as the shareable template.
 
 ```powershell
 cratedig                 # launch the TUI
+cratedig gui             # launch the desktop GUI (needs [gui] extra)
 cratedig web             # launch the local web sample-diving panel
 cratedig scan            # index library_dirs (headless)
 cratedig classify        # fill missing categories from filenames/paths
@@ -57,16 +59,10 @@ cratedig download "<url>" --url --source youtube
 | `f` | find similar to selected row |
 | `u` | show duplicate files grouped by file hash |
 | `t` | reload the path-based library tree |
+| `b` | toggle favorite on the selected folder (in tree) or sample (in contents) |
 | arrows / click | preview the highlighted sample or download hit (uses `ffplay`) |
 | `p` | play / stop the selected sample, or preview the selected download hit |
-| `w` | render the interactive terminal waveform for the selected sample |
-| `v` | open/sync the selected sample in the local web panel |
-| `z` / `o` | waveform zoom in / out |
-| `h` / `l` | waveform pan left / right |
-| `j` / `k` | move waveform playhead left / right |
-| `b` / `e` | mark waveform selection start / end |
-| `g` | loop selected waveform region |
-| `y` | clear waveform selection |
+| `w` | open/sync the selected sample in the local web panel |
 | `x` | stop playback |
 | `r` | refresh / clear search |
 | `d` | toggle Download mode |
@@ -79,6 +75,23 @@ Download-mode preview needs a direct preview URL from the backend. FreeSound
 results include one; Yandex/YouTube hits usually do not, so they show a status
 message and can still be downloaded with `Enter`.
 
+### Desktop GUI (early skeleton)
+
+```powershell
+pip install -e ".[gui]"   # installs PySide6
+cratedig gui              # or: python -m cratedig gui
+```
+
+The desktop GUI is an early skeleton. It shows a **folder tree** on the left, a
+**sample table** in the centre, and a **waveform + play/stop panel** on the right
+(QSplitter layout). Playback reuses the same `ffplay`-backed `AudioPlayer` as the
+TUI. PySide6 is an optional dependency — core TUI and web runs without it.
+
+Features available in this stage: browse library tree, view sample table per
+folder, decode and display waveform peaks on demand, play/stop audio. File
+management, duplicates, tagging, favorites mutation, download, and similarity UI
+are not yet implemented in the GUI.
+
 ### API tokens
 
 The Download mode needs credentials for the paid/private backends. See
@@ -88,9 +101,10 @@ The Download mode needs credentials for the paid/private backends. See
 - **Yandex Music** (`sources.yandex.token` or `token_file`) — required for track search/download. The old `yamdl.exe` flow is gone; we now use the `yandex-music` Python library directly.
 - **YouTube** — no token; `pip install -e ".[download]"` for `yt-dlp` + `ffmpeg` on PATH.
 
-Scan, analyze, classify, download, and waveform operations show live progress/status in a
-multi-line TUI operation panel. Download and waveform jobs can run while analyze
-is running; scan and analyze are intentionally mutually exclusive.
+Scan, analyze, classify, and download operations show live progress/status in a
+multi-line TUI operation panel. Scan and analyze are intentionally mutually exclusive.
+After analysis, the TUI library table shows a compact waveform thumbnail in each
+analyzed file row.
 
 ### Web panel
 
@@ -98,10 +112,14 @@ is running; scan and analyze are intentionally mutually exclusive.
 cratedig web
 ```
 
-The web panel opens at `http://127.0.0.1:8765` by default. It shows a path-based
-library tree, Canvas stereo waveform, browser audio controls, file metadata,
-tags, and analysis fields. In the TUI, press `v` on a selected sample to open the
-same panel directly at `/?sample=<id>`.
+The web panel opens at `http://127.0.0.1:8765` by default. It shows a collapsible
+folder tree with a **Favorites** and **Recent** sidebar, breadcrumbs, a per-folder
+content list, a library-wide filter for flat cross-library matches, Canvas stereo
+waveform, browser audio controls, file metadata, tags, and analysis fields.
+Expanded folders, current folder, and selected sample are persisted in `localStorage`.
+In the TUI, press `w` on a selected sample to open the same panel directly at
+`/?sample=<id>`. Favorites and recently-opened folders are shared between the web
+panel and the TUI via the SQLite database.
 
 ## Clone on another machine
 
@@ -143,7 +161,7 @@ otherwise.
 ## Layout
 
 See [ARCHITECTURE.md](ARCHITECTURE.md). Source under `cratedig/`:
-`db/` · `scan/` · `audio/` · `search/` · `sources/` · `metadata/` · `tui/` · `web/`.
+`db/` · `scan/` · `audio/` · `search/` · `sources/` · `metadata/` · `tui/` · `web/` · `gui/`.
 
 ## Tests
 

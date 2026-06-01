@@ -20,5 +20,4 @@ def test_format_operations_uses_fixed_order_and_idle_defaults():
         "analyze: 12/100 12%",
         "classify: idle",
         "download: done",
-        "waveform: idle",
     ]

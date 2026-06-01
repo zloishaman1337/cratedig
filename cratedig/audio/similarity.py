@@ -1,4 +1,4 @@
-"""Cosine similarity nearest-neighbor search over feature vectors.
+"""Similarity nearest-neighbor search over feature vectors.
 
 Brute-force numpy is fine up to ~100k samples. Swap in hnswlib later for scale
 behind the same interface.
@@ -18,17 +18,22 @@ def cosine_topk(
     """Return up to k (sample_id, similarity) sorted by similarity desc.
 
     Vectors are assumed L2-normalized (see features.extract_features), so the
-    dot product equals cosine similarity.
+    dot product equals cosine similarity. Candidates with a different vector
+    shape are ignored; they were produced by an older analyzer and need re-run.
     """
     if not candidates:
         return []
-    ids = np.array([cid for cid, _ in candidates])
-    mat = np.vstack([v for _, v in candidates]).astype(np.float32)
 
     q = query.astype(np.float32)
     qn = np.linalg.norm(q)
     if qn > 0:
         q = q / qn
+    usable = [(cid, v) for cid, v in candidates if v.shape == q.shape]
+    if not usable:
+        return []
+
+    ids = np.array([cid for cid, _ in usable])
+    mat = np.vstack([v for _, v in usable]).astype(np.float32)
 
     sims = mat @ q
     order = np.argsort(-sims)
