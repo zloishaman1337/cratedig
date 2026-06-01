@@ -284,6 +284,50 @@ def test_folders_and_samples_are_independent_favorites(tmp_path):
     db.close()
 
 
+def test_toggle_favorite_on_non_favorite_returns_true_and_adds(tmp_path):
+    db = Database(tmp_path / "t.db")
+    result = db.toggle_favorite("folder", "packs/drums")
+    assert result is True
+    assert db.is_favorite("folder", "packs/drums") is True
+    db.close()
+
+
+def test_toggle_favorite_on_existing_favorite_returns_false_and_removes(tmp_path):
+    db = Database(tmp_path / "t.db")
+    db.add_favorite("folder", "packs/drums")
+    assert db.is_favorite("folder", "packs/drums") is True
+    result = db.toggle_favorite("folder", "packs/drums")
+    assert result is False
+    assert db.is_favorite("folder", "packs/drums") is False
+    db.close()
+
+
+def test_toggle_favorite_round_trip(tmp_path):
+    db = Database(tmp_path / "t.db")
+    result1 = db.toggle_favorite("sample", "42")
+    assert result1 is True
+    assert db.is_favorite("sample", "42") is True
+    result2 = db.toggle_favorite("sample", "42")
+    assert result2 is False
+    assert db.is_favorite("sample", "42") is False
+    result3 = db.toggle_favorite("sample", "42")
+    assert result3 is True
+    assert db.is_favorite("sample", "42") is True
+    db.close()
+
+
+def test_toggle_favorite_folder_and_sample_kinds_independent(tmp_path):
+    db = Database(tmp_path / "t.db")
+    db.toggle_favorite("folder", "X")
+    assert db.is_favorite("folder", "X") is True
+    db.toggle_favorite("sample", "X")
+    assert db.is_favorite("sample", "X") is True
+    db.toggle_favorite("folder", "X")
+    assert db.is_favorite("folder", "X") is False
+    assert db.is_favorite("sample", "X") is True
+    db.close()
+
+
 # --- Recent Folders ---
 
 

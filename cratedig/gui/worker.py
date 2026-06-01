@@ -18,12 +18,23 @@ class IndexWorker(QObject):
     treeReady = Signal(object, object, object)  # (nodes_dict, favorites_list[Sample], samples)
     progress = Signal(str, int, int)            # (phase, done, total)
     peaksReady = Signal(int, object)            # (seq, mono_ndarray)
+    searchReady = Signal(int, object, str)      # (seq, hits_list[SearchHit], used_backend)
+    downloadDone = Signal(bool, str)            # (ok, message)
     failed = Signal(str, str)                   # (context, message)
 
     def __init__(self, db: Database, cfg: Config, parent: QObject | None = None) -> None:
         super().__init__(parent)
         self._db = db
         self._cfg = cfg
+        self._dm = None  # lazy DownloadManager (imports source backends)
+
+    def _manager(self):
+        """Lazily build the DownloadManager (backend imports are heavyweight)."""
+        if self._dm is None:
+            from ..sources import DownloadManager
+
+            self._dm = DownloadManager(self._db, self._cfg)
+        return self._dm
 
     @Slot()
     def request_reload(self) -> None:
@@ -50,6 +61,15 @@ class IndexWorker(QObject):
             self.treeReady.emit(nodes, favorites, samples)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("reload", str(exc))
+
+    @Slot(int)
+    def request_toggle_favorite(self, sample_id: int) -> None:
+        """Toggle a sample's favorite state in the DB, then reload the tree."""
+        try:
+            self._db.toggle_favorite("sample", str(sample_id))
+            self.request_reload()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("toggle_favorite", str(exc))
 
     @Slot()
     def request_scan_analyze(self) -> None:
@@ -88,11 +108,40 @@ class IndexWorker(QObject):
             if peaks_arr.ndim != 3 or peaks_arr.shape[1] == 0:
                 self.failed.emit("peaks", "invalid peaks shape")
                 return
-            # Per-bin amplitude: max(|min|, |max|) per channel, then average channels
-            mono = np.maximum(
-                np.abs(peaks_arr[:, :, 0]), np.abs(peaks_arr[:, :, 1])
-            ).mean(axis=0).astype(np.float32)
+            # Signed per-bin envelope: average channels, keep min (negative) and
+            # max (positive) separate, then interleave so compute_peaks re-bins
+            # into a symmetric min/max waveform instead of a top-half-only one.
+            lo = peaks_arr[:, :, 0].mean(axis=0)  # signed minima (≤ 0)
+            hi = peaks_arr[:, :, 1].mean(axis=0)  # signed maxima (≥ 0)
+            mono = np.empty(lo.size * 2, dtype=np.float32)
+            mono[0::2] = lo
+            mono[1::2] = hi
 
             self.peaksReady.emit(seq, mono)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("peaks", str(exc))
+
+    @Slot(int, str, str, int)
+    def request_search(self, seq: int, query: str, mode: str, limit: int) -> None:
+        """Search source backends for a query; emit hits tagged with seq."""
+        try:
+            hits, used = self._manager().search(query, mode=mode, limit=limit)
+            self.searchReady.emit(seq, hits, used)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("search", str(exc))
+
+    @Slot(object)
+    def request_download(self, hit) -> None:
+        """Download a chosen SearchHit, auto-index it, then reload the tree."""
+        try:
+            def progress(detail: str) -> None:
+                self.progress.emit(f"download: {detail}", 0, 0)
+
+            res = self._manager().fetch_hit(hit, auto_index=True, progress=progress)
+            if res.ok:
+                self.downloadDone.emit(True, f"downloaded [{res.source}] → {res.path}")
+                self.request_reload()  # surface the new sample in the tree
+            else:
+                self.downloadDone.emit(False, f"FAILED [{res.source}] {res.error}")
+        except Exception as exc:  # noqa: BLE001
+            self.downloadDone.emit(False, f"download failed: {exc}")

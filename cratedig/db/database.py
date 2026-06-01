@@ -233,6 +233,17 @@ class Database:
             )
             self.conn.commit()
 
+    def toggle_favorite(self, kind: str, ref: str) -> bool:
+        """Toggle favorite state; return the NEW state (True = now a favorite)."""
+        # Single lock acquisition makes the check-then-act atomic; the reused
+        # methods re-enter the same RLock.
+        with self.lock:
+            if self.is_favorite(kind, ref):
+                self.remove_favorite(kind, ref)
+                return False
+            self.add_favorite(kind, ref)
+            return True
+
     def is_favorite(self, kind: str, ref: str) -> bool:
         with self.lock:
             row = self.conn.execute(

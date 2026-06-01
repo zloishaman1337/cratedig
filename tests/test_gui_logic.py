@@ -6,7 +6,8 @@ import numpy as np
 import pytest
 
 from cratedig.db.models import Sample
-from cratedig.gui.logic import compute_peaks, tree_rows
+from cratedig.gui.logic import compute_peaks, hit_rows, tree_rows, is_sample_favorite
+from cratedig.sources.base import SearchHit
 from cratedig.tui.browser import FolderNode
 
 
@@ -538,3 +539,53 @@ class TestTreeRows:
         # Verify is_favorites_branch
         is_fav_flags = [row[3] for row in result]
         assert is_fav_flags == [True, True, True, False, False, False]
+
+
+class TestHitRows:
+    """Test hit_rows(hits) -> list of (title, artist, duration, backend) tuples."""
+
+    def test_empty(self):
+        assert hit_rows([]) == []
+
+    def test_full_hit_formats_duration_one_decimal(self):
+        hit = SearchHit(
+            backend="freesound", id="123", title="Kick", artist="Foo",
+            duration_sec=2.5,
+        )
+        assert hit_rows([hit]) == [("Kick", "Foo", "2.5", "freesound")]
+
+    def test_missing_duration_shows_dash(self):
+        hit = SearchHit(backend="yandex", id="x", title="Track", artist="Bar")
+        assert hit_rows([hit]) == [("Track", "Bar", "-", "yandex")]
+
+    def test_order_preserved_for_row_index_mapping(self):
+        hits = [
+            SearchHit(backend="a", id="1", title="One"),
+            SearchHit(backend="b", id="2", title="Two"),
+        ]
+        rows = hit_rows(hits)
+        assert [r[0] for r in rows] == ["One", "Two"]
+        assert [r[3] for r in rows] == ["a", "b"]
+
+
+class TestIsSampleFavorite:
+    """Test is_sample_favorite(favorites_by_id: dict, sample_id: int) -> bool."""
+
+    def test_sample_id_present_returns_true(self):
+        """Sample ID that exists in dict should return True."""
+        sample1 = _make_sample(42, "kick.wav")
+        sample2 = _make_sample(99, "snare.wav")
+        favorites_by_id = {42: sample1, 99: sample2}
+        assert is_sample_favorite(favorites_by_id, 42) is True
+
+    def test_sample_id_absent_returns_false(self):
+        """Sample ID that does not exist in dict should return False."""
+        sample1 = _make_sample(42, "kick.wav")
+        favorites_by_id = {42: sample1}
+        assert is_sample_favorite(favorites_by_id, 100) is False
+
+    def test_empty_dict_returns_false(self):
+        """Empty dict should return False for any sample ID."""
+        favorites_by_id = {}
+        assert is_sample_favorite(favorites_by_id, 1) is False
+        assert is_sample_favorite(favorites_by_id, 42) is False
