@@ -6,21 +6,26 @@ from pathlib import Path
 import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
+from .. import files
 from ..config import Config
 from ..db.database import Database
 from ..tui.browser import build_folder_tree
+from .logic import resolve_similar
 
 
 class IndexWorker(QObject):
     """Runs all blocking operations on a QThread; results are emitted as signals."""
 
     # outbound signals
-    treeReady = Signal(object, object, object)  # (nodes_dict, favorites_list[Sample], samples)
+    treeReady = Signal(object, object, object, object, object)  # (nodes_dict, favorites_list[Sample], samples, tags_by_id, all_tags)
     progress = Signal(str, int, int)            # (phase, done, total)
     peaksReady = Signal(int, object)            # (seq, mono_ndarray)
     searchReady = Signal(int, object, str)      # (seq, hits_list[SearchHit], used_backend)
+    similarReady = Signal(int, object, int, object)  # (seq, samples_list[Sample], source_id, scores_dict)
+    duplicatesReady = Signal(object)            # (samples_list[Sample])
     downloadDone = Signal(bool, str)            # (ok, message)
     failed = Signal(str, str)                   # (context, message)
+    metadataReady = Signal(int, object)         # (seq, embedded_dict_or_None)
 
     def __init__(self, db: Database, cfg: Config, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -58,7 +63,10 @@ class IndexWorker(QObject):
                 if s is not None:
                     favorites.append(s)
 
-            self.treeReady.emit(nodes, favorites, samples)
+            tags_by_id = {s.id: self._db.tags_for(s.id) for s in samples if s.id is not None}
+            all_tags = self._db.all_tags()
+
+            self.treeReady.emit(nodes, favorites, samples, tags_by_id, all_tags)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("reload", str(exc))
 
@@ -70,6 +78,59 @@ class IndexWorker(QObject):
             self.request_reload()
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("toggle_favorite", str(exc))
+
+    @Slot(int, object)
+    def request_set_tags(self, sample_id: int, desired) -> None:
+        """Replace sample_id's tags with the desired set (atomic), then reload."""
+        try:
+            self._db.set_tags_for(sample_id, list(desired))
+            self.request_reload()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("set_tags", str(exc))
+
+    @Slot(int)
+    def request_delete(self, sample_id: int) -> None:
+        """Trash the sample file and remove it from the DB, then reload."""
+        try:
+            sample = self._db.get_sample(sample_id)
+            if sample is not None:
+                files.trash_file(sample.path)
+            self._db.delete_sample(sample_id)
+            self.request_reload()
+        except RuntimeError as exc:
+            self.failed.emit("delete", f"{exc} (install cratedig[gui])")
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("delete", str(exc))
+
+    @Slot(int, str)
+    def request_rename(self, sample_id: int, new_name: str) -> None:
+        """Rename the sample file and update DB, then reload."""
+        try:
+            sample = self._db.get_sample(sample_id)
+            if sample is None:
+                self.failed.emit("rename", "sample not found")
+                return
+            # FS op first, then DB: if the DB update fails the file has moved
+            # but a later re-scan re-indexes it under the new path.
+            new_path = files.rename_file(sample.path, new_name)
+            self._db.update_sample_location(sample_id, new_path, Path(new_path).name)
+            self.request_reload()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("rename", str(exc))
+
+    @Slot(int, str)
+    def request_move(self, sample_id: int, dest_dir: str) -> None:
+        """Move the sample file to dest_dir and update DB, then reload."""
+        try:
+            sample = self._db.get_sample(sample_id)
+            if sample is None:
+                self.failed.emit("move", "sample not found")
+                return
+            new_path = files.move_file(sample.path, dest_dir)
+            self._db.update_sample_location(sample_id, new_path, Path(new_path).name)
+            self.request_reload()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("move", str(exc))
 
     @Slot()
     def request_scan_analyze(self) -> None:
@@ -120,6 +181,45 @@ class IndexWorker(QObject):
             self.peaksReady.emit(seq, mono)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("peaks", str(exc))
+
+    @Slot(int, int, int, object)
+    def request_similar(self, seq: int, sample_id: int, k: int, aspects) -> None:
+        """Find samples nearest to sample_id by feature aspects; emit tagged with seq."""
+        from .. import index as indexer
+
+        try:
+            hits = indexer.find_similar_aspects(self._db, sample_id, list(aspects), k=k)
+            samples_by_id = {sid: self._db.get_sample(sid) for sid, _, _ in hits}
+            samples = resolve_similar([(sid, c) for sid, c, _ in hits], samples_by_id)
+            scores = {sid: combined for sid, combined, _ in hits}
+            self.similarReady.emit(seq, samples, sample_id, scores)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("similar", str(exc))
+
+    @Slot(int, str)
+    def request_metadata(self, seq: int, path: str) -> None:
+        """Read embedded tags from path via mutagen; emit metadataReady."""
+        try:
+            from mutagen import File as MutagenFile
+            mf = MutagenFile(path, easy=True)
+            tags = {}
+            if mf is not None and mf.tags:
+                for k in ("artist", "title", "album", "genre", "date", "albumartist", "tracknumber"):
+                    v = mf.tags.get(k)
+                    if v:
+                        tags[k] = v[0] if isinstance(v, list) else str(v)
+            self.metadataReady.emit(seq, tags or None)
+        except Exception:  # noqa: BLE001
+            self.metadataReady.emit(seq, None)
+
+    @Slot()
+    def request_duplicates(self) -> None:
+        """Find samples sharing a file_hash; emit the grouped list."""
+        try:
+            samples = self._db.duplicate_samples()
+            self.duplicatesReady.emit(samples)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("duplicates", str(exc))
 
     @Slot(int, str, str, int)
     def request_search(self, seq: int, query: str, mode: str, limit: int) -> None:

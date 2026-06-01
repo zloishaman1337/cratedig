@@ -3,7 +3,14 @@
 from __future__ import annotations
 
 from PySide6.QtCore import Qt, Signal
-from PySide6.QtWidgets import QTreeWidget, QTreeWidgetItem, QWidget, QVBoxLayout
+from PySide6.QtWidgets import (
+    QHBoxLayout,
+    QPushButton,
+    QTreeWidget,
+    QTreeWidgetItem,
+    QVBoxLayout,
+    QWidget,
+)
 
 # Custom data roles
 _KEY_ROLE = Qt.ItemDataRole.UserRole
@@ -14,6 +21,8 @@ class TreePane(QWidget):
     """Renders a folder tree from tree_rows() output and emits selection events."""
 
     folder_selected = Signal(str, bool)  # (key, is_favorites_branch)
+    scan_requested = Signal()
+    analyze_requested = Signal()
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -21,11 +30,22 @@ class TreePane(QWidget):
         self._tree.setHeaderHidden(True)
         self._tree.setColumnCount(1)
 
+        scan_btn = QPushButton("Scan")
+        analyze_btn = QPushButton("Analyze")
+        btn_bar = QHBoxLayout()
+        btn_bar.setContentsMargins(4, 4, 4, 4)
+        btn_bar.addWidget(scan_btn)
+        btn_bar.addWidget(analyze_btn)
+        btn_bar.addStretch()
+
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._tree)
+        layout.addLayout(btn_bar)
 
         self._tree.currentItemChanged.connect(self._on_item_changed)
+        scan_btn.clicked.connect(self.scan_requested)
+        analyze_btn.clicked.connect(self.analyze_requested)
 
     def set_rows(self, rows: list[tuple]) -> None:
         """Rebuild the tree from tree_rows() output."""

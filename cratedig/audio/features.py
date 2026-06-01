@@ -23,6 +23,27 @@ FEATURE_DIM = (
     + SCALAR_COUNT
 )
 
+# Named feature sub-blocks → (start, end) slices into the FEATURE_DIM vector.
+# Order MUST match the concatenation in extract_features().
+_b0 = 0
+_b1 = _b0 + MEL_BANDS * 2      # logmel
+_b2 = _b1 + MFCCS * 2          # mfcc
+_b3 = _b2 + 7 * 2               # spectral contrast
+_b4 = _b3 + 12 * 2              # chroma
+_b5 = _b4 + ENVELOPE_BINS       # envelope
+_b6 = _b5 + SCALAR_COUNT        # scalars (== FEATURE_DIM)
+
+assert _b6 == FEATURE_DIM, f"ASPECT_BLOCKS boundary mismatch: {_b6} != {FEATURE_DIM}"
+
+ASPECT_BLOCKS: dict[str, tuple[int, int]] = {
+    "Overall":   (_b0, _b6),
+    "Spectrum":  (_b0, _b1),    # log-mel spectrum shape
+    "Timbre":    (_b1, _b3),    # mfcc + spectral contrast
+    "Pitch":     (_b3, _b4),    # chroma
+    "Amplitude": (_b4, _b6),    # envelope + scalar dynamics
+}
+ASPECTS: tuple[str, ...] = ("Overall", "Spectrum", "Timbre", "Pitch", "Amplitude")
+
 
 def _require_librosa():
     try:

@@ -85,6 +85,7 @@ def test_migration_adds_waveform_preview_to_existing_database(tmp_path):
     db = Database(path)
     columns = {row["name"] for row in db.conn.execute("PRAGMA table_info(samples)").fetchall()}
     assert "waveform_preview" in columns
+    assert "instrument_class" in columns
     db.close()
 
 
@@ -102,6 +103,8 @@ def test_analyze_pending_updates_waveform_preview(monkeypatch, tmp_path):
             loudness_lufs=-12.0,
             waveform_preview="▁▃█▃",
             vector=np.arange(4, dtype=np.float32),
+            centroid_norm=0.3,
+            zcr=0.1,
         )
 
     monkeypatch.setattr("cratedig.audio.analyzer.analyze", fake_analyze)
@@ -126,11 +129,37 @@ def test_analyze_pending_rebuilds_old_feature_dimensions(monkeypatch, tmp_path):
             loudness_lufs=None,
             waveform_preview="▁" * 28,
             vector=np.ones(FEATURE_DIM, dtype=np.float32),
+            centroid_norm=0.2,
+            zcr=0.05,
         )
 
     monkeypatch.setattr("cratedig.audio.analyzer.analyze", fake_analyze)
     assert indexer.analyze_pending(db, SimpleNamespace(audio=SimpleNamespace(analysis_sr=22050))) == 1
     assert db.get_sample(sid).feature_dim == FEATURE_DIM
+    db.close()
+
+
+def test_analyze_pending_preserves_existing_category(monkeypatch, tmp_path):
+    # Cryptic filename (no keyword) + no audio-derivable class → COALESCE must
+    # keep the previously-set category/instrument_class rather than null them.
+    audio = tmp_path / "0413.wav"
+    audio.write_bytes(b"fake")
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample(str(audio)))
+    db.set_classification(sid, "loop", "snare")
+
+    def fake_analyze(path, sr):
+        return SimpleNamespace(
+            bpm=None, musical_key=None, key_scale=None, loudness_lufs=None,
+            waveform_preview="▁", vector=np.ones(FEATURE_DIM, dtype=np.float32),
+            centroid_norm=None, zcr=None,
+        )
+
+    monkeypatch.setattr("cratedig.audio.analyzer.analyze", fake_analyze)
+    indexer.analyze_pending(db, SimpleNamespace(audio=SimpleNamespace(analysis_sr=22050)))
+    sample = db.get_sample(sid)
+    assert sample.category == "loop"
+    assert sample.instrument_class == "snare"
     db.close()
 
 
@@ -161,10 +190,20 @@ def test_classify_pending_updates_missing_categories(tmp_path):
     db = Database(tmp_path / "t.db")
     sid = db.upsert_sample(_sample("/packs/kicks/kick_01.wav"))
     assert db.get_sample(sid).category is None
+    assert db.get_sample(sid).instrument_class is None
 
+    # First call: classify the unclassified sample
     assert indexer.classify_pending(db) == 1
-    assert db.get_sample(sid).category == "kick"
-    assert indexer.classify_pending(db) == 0
+    sample = db.get_sample(sid)
+    # kick_01.wav: category is None (kick is not a CATEGORY_KEYWORD)
+    # but instrument_class is "kick" (kick IS an INSTRUMENT_KEYWORD)
+    assert sample.category is None
+    assert sample.instrument_class == "kick"
+
+    # Second call still processes because category is still NULL and the WHERE
+    # includes "category IS NULL". It will re-set the same values (idempotent).
+    assert indexer.classify_pending(db) == 1
+    assert db.get_sample(sid).instrument_class == "kick"
     db.close()
 
 
@@ -429,4 +468,219 @@ def test_touch_recent_folder_upserts(tmp_path):
     # Should still have exactly 2 entries, not 4
     assert len(recent) == 2
     assert recent[0] == "packs/drums"
+    db.close()
+
+
+# --- Remove Tag (new) ---
+
+
+def test_remove_tag_removes_single_tag(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/t.wav"))
+    db.add_tag(sid, "drums")
+    db.add_tag(sid, "loop")
+
+    db.remove_tag(sid, "drums")
+
+    assert db.tags_for(sid) == ["loop"]
+    db.close()
+
+
+def test_remove_tag_only_removes_association(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid1 = db.upsert_sample(_sample("/a/t1.wav"))
+    sid2 = db.upsert_sample(_sample("/a/t2.wav"))
+    db.add_tag(sid1, "drums")
+    db.add_tag(sid2, "drums")
+
+    db.remove_tag(sid1, "drums")
+
+    assert db.tags_for(sid1) == []
+    assert db.tags_for(sid2) == ["drums"]
+    db.close()
+
+
+def test_remove_tag_nonexistent_tag_does_not_error(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/t.wav"))
+    db.add_tag(sid, "drums")
+
+    # Should not raise
+    db.remove_tag(sid, "nonexistent")
+
+    assert db.tags_for(sid) == ["drums"]
+    db.close()
+
+
+# --- All Tags (new) ---
+
+
+def test_all_tags_returns_distinct_sorted(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid1 = db.upsert_sample(_sample("/a/t1.wav"))
+    sid2 = db.upsert_sample(_sample("/a/t2.wav"))
+    db.add_tag(sid1, "drums")
+    db.add_tag(sid1, "loop")
+    db.add_tag(sid2, "drums")
+    db.add_tag(sid2, "sample")
+
+    tags = db.all_tags()
+
+    assert tags == ["drums", "loop", "sample"]
+    db.close()
+
+
+def test_all_tags_empty_database(tmp_path):
+    db = Database(tmp_path / "t.db")
+    assert db.all_tags() == []
+    db.close()
+
+
+def test_all_tags_single_tag(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/t.wav"))
+    db.add_tag(sid, "drums")
+
+    assert db.all_tags() == ["drums"]
+    db.close()
+
+
+# --- Set Tags (atomic replace) ---
+
+
+def test_set_tags_for_replaces_existing(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/t.wav"))
+    db.add_tag(sid, "drums")
+    db.add_tag(sid, "loop")
+
+    db.set_tags_for(sid, ["kick", "drums"])
+
+    assert db.tags_for(sid) == ["drums", "kick"]
+    db.close()
+
+
+def test_set_tags_for_empty_clears_all(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/t.wav"))
+    db.add_tag(sid, "drums")
+
+    db.set_tags_for(sid, [])
+
+    assert db.tags_for(sid) == []
+    db.close()
+
+
+def test_set_tags_for_dedups(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/t.wav"))
+
+    db.set_tags_for(sid, ["loop", "loop", "drums"])
+
+    assert db.tags_for(sid) == ["drums", "loop"]
+    db.close()
+
+
+def test_set_tags_for_only_affects_target_sample(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid1 = db.upsert_sample(_sample("/a/t1.wav"))
+    sid2 = db.upsert_sample(_sample("/a/t2.wav"))
+    db.add_tag(sid2, "snare")
+
+    db.set_tags_for(sid1, ["kick"])
+
+    assert db.tags_for(sid1) == ["kick"]
+    assert db.tags_for(sid2) == ["snare"]
+    db.close()
+
+
+# --- Delete Sample (new) ---
+
+
+def test_delete_sample_removes_from_count(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/t.wav"))
+    assert db.count_samples() == 1
+
+    db.delete_sample(sid)
+
+    assert db.count_samples() == 0
+    assert db.get_sample(sid) is None
+    db.close()
+
+
+def test_delete_sample_cascades_tags(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/t.wav"))
+    db.add_tag(sid, "drums")
+    db.add_tag(sid, "loop")
+
+    db.delete_sample(sid)
+
+    assert db.tags_for(sid) == []
+    db.close()
+
+
+def test_delete_sample_removes_favorite_entry(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/t.wav"))
+    db.add_favorite("sample", str(sid))
+    assert db.is_favorite("sample", str(sid)) is True
+
+    db.delete_sample(sid)
+
+    assert db.is_favorite("sample", str(sid)) is False
+    db.close()
+
+
+def test_delete_sample_does_not_affect_other_samples(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid1 = db.upsert_sample(_sample("/a/t1.wav"))
+    sid2 = db.upsert_sample(_sample("/a/t2.wav"))
+    db.add_tag(sid1, "drums")
+    db.add_tag(sid2, "snare")
+
+    db.delete_sample(sid1)
+
+    assert db.count_samples() == 1
+    assert db.get_sample(sid2) is not None
+    assert db.tags_for(sid2) == ["snare"]
+    db.close()
+
+
+# --- Update Sample Location (new) ---
+
+
+def test_update_sample_location_updates_path_and_filename(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/old/path/kick.wav"))
+
+    db.update_sample_location(sid, "/new/path", "new_kick.wav")
+
+    sample = db.get_sample(sid)
+    assert sample.path == "/new/path"
+    assert sample.filename == "new_kick.wav"
+    db.close()
+
+
+def test_update_sample_location_preserves_other_fields(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/old/path/kick.wav", bpm=120.0, musical_key="C"))
+
+    db.update_sample_location(sid, "/new/path", "new_kick.wav")
+
+    sample = db.get_sample(sid)
+    assert sample.bpm == 120.0
+    assert sample.musical_key == "C"
+    db.close()
+
+
+def test_update_sample_location_keeps_id_unchanged(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/old/path/kick.wav"))
+
+    db.update_sample_location(sid, "/new/path", "new_kick.wav")
+
+    sample = db.get_sample(sid)
+    assert sample.id == sid
     db.close()

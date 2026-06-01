@@ -12,9 +12,9 @@ from typing import Callable
 
 from .config import Config
 from .db import Database
-from .audio.category import classify_category
+from .audio.category import classify_category, classify_instrument, classify_from_audio
 from .audio.features import FEATURE_DIM
-from .audio.similarity import cosine_topk
+from .audio.similarity import cosine_topk, aspect_topk
 from .scan import scan_directory
 
 
@@ -39,7 +39,7 @@ def analyze_pending(
 
     with db.lock:
         rows = db.conn.execute(
-            "SELECT id, path FROM samples "
+            "SELECT id, path, duration_sec FROM samples "
             "WHERE feature_vector IS NULL OR feature_dim IS NULL OR feature_dim != ? "
             "OR waveform_preview IS NULL",
             (FEATURE_DIM,),
@@ -47,20 +47,31 @@ def analyze_pending(
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
     done = 0
     for r in rows:
-        sid, path = int(r["id"]), r["path"]
+        sid, path, duration = int(r["id"]), r["path"], r["duration_sec"]
         if not Path(path).is_file():
             continue
         d = analyze(path, sr=cfg.audio.analysis_sr)
+        cat = classify_category(path) or None
+        instr = classify_instrument(path) or None
+        if cat is None or instr is None:
+            fb_cat, fb_instr = classify_from_audio(duration, d.centroid_norm, d.zcr)
+            cat = cat or fb_cat
+            instr = instr or fb_instr
         with db.lock:
             db.conn.execute(
+                # COALESCE keeps a previously-classified value when this pass
+                # yields None (e.g. cryptic filename + failed audio fallback),
+                # so re-analyze never wipes a good category/class.
                 "UPDATE samples SET bpm=?, musical_key=?, key_scale=?, loudness_lufs=?, "
-                "waveform_preview=?, feature_vector=?, feature_dim=?, analyzed_at=? WHERE id=?",
+                "waveform_preview=?, feature_vector=?, feature_dim=?, analyzed_at=?, "
+                "category=COALESCE(?, category), instrument_class=COALESCE(?, instrument_class) "
+                "WHERE id=?",
                 (
                     d.bpm, d.musical_key, d.key_scale, d.loudness_lufs,
                     d.waveform_preview,
                     d.vector.astype("float32").tobytes() if d.vector is not None else None,
                     int(d.vector.shape[0]) if d.vector is not None else None,
-                    now, sid,
+                    now, cat, instr, sid,
                 ),
             )
             db.conn.commit()
@@ -73,26 +84,26 @@ def analyze_pending(
 def classify_pending(
     db: Database, progress: Callable[[int, int], None] | None = None
 ) -> int:
-    """Fill missing sample categories from filename/path heuristics."""
+    """Fill missing sample categories and instrument classes from filename/path heuristics."""
     with db.lock:
         rows = db.conn.execute(
-            "SELECT id, path FROM samples WHERE category IS NULL OR category = ''"
+            "SELECT id, path FROM samples "
+            "WHERE category IS NULL OR category = '' OR instrument_class IS NULL"
         ).fetchall()
 
     done = 0
-    updates: list[tuple[str, int]] = []
+    updates: list[tuple[str | None, str | None, int]] = []
     for r in rows:
-        category = classify_category(r["path"])
-        if not category:
-            continue
-        updates.append((category, int(r["id"])))
+        cat = classify_category(r["path"]) or None
+        instr = classify_instrument(r["path"]) or None
+        updates.append((cat, instr, int(r["id"])))
         done += 1
         if progress:
             progress(done, len(rows))
     if updates:
         with db.lock:
             db.conn.executemany(
-                "UPDATE samples SET category=? WHERE id=?",
+                "UPDATE samples SET category=?, instrument_class=? WHERE id=?",
                 updates,
             )
             db.conn.commit()
@@ -104,3 +115,13 @@ def find_similar(db: Database, sample_id: int, k: int = 20) -> list[tuple[int, f
     if query is None:
         return []
     return cosine_topk(query, db.vectors(), k=k, exclude_id=sample_id)
+
+
+def find_similar_aspects(
+    db: Database, sample_id: int, aspects: list[str] | tuple[str, ...], k: int = 20
+) -> list[tuple[int, float, dict[str, float]]]:
+    """Aspect-weighted similar search: (id, combined_score, per_aspect_scores)."""
+    query = db.get_vector(sample_id)
+    if query is None:
+        return []
+    return aspect_topk(query, db.vectors(), aspects, k=k, exclude_id=sample_id)

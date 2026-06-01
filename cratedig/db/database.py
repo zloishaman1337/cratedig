@@ -51,6 +51,8 @@ class Database:
         }
         if "waveform_preview" not in columns:
             self.conn.execute("ALTER TABLE samples ADD COLUMN waveform_preview TEXT")
+        if "instrument_class" not in columns:
+            self.conn.execute("ALTER TABLE samples ADD COLUMN instrument_class TEXT")
 
     def close(self) -> None:
         with self.lock:
@@ -73,17 +75,18 @@ class Database:
                 """
                 INSERT INTO samples (path, filename, source, file_hash, format, file_size,
                     duration_sec, samplerate, channels, bpm, musical_key, key_scale,
-                    loudness_lufs, category, mood, waveform_preview, feature_vector, feature_dim,
+                    loudness_lufs, category, instrument_class, mood, waveform_preview, feature_vector, feature_dim,
                     analyzed_at, created_at, indexed_at)
                 VALUES (:path, :filename, :source, :file_hash, :format, :file_size,
                     :duration_sec, :samplerate, :channels, :bpm, :musical_key, :key_scale,
-                    :loudness_lufs, :category, :mood, :waveform_preview, :vec, :dim, :analyzed_at, :created_at, :indexed_at)
+                    :loudness_lufs, :category, :instrument_class, :mood, :waveform_preview, :vec, :dim, :analyzed_at, :created_at, :indexed_at)
                 ON CONFLICT(path) DO UPDATE SET
                     filename=excluded.filename, source=excluded.source, file_hash=excluded.file_hash,
                     format=excluded.format, file_size=excluded.file_size, duration_sec=excluded.duration_sec,
                     samplerate=excluded.samplerate, channels=excluded.channels, bpm=excluded.bpm,
                     musical_key=excluded.musical_key, key_scale=excluded.key_scale,
-                    loudness_lufs=excluded.loudness_lufs, category=excluded.category, mood=excluded.mood,
+                    loudness_lufs=excluded.loudness_lufs, category=excluded.category,
+                    instrument_class=excluded.instrument_class, mood=excluded.mood,
                     waveform_preview=COALESCE(excluded.waveform_preview, samples.waveform_preview),
                     feature_vector=COALESCE(excluded.feature_vector, samples.feature_vector),
                     feature_dim=COALESCE(excluded.feature_dim, samples.feature_dim),
@@ -95,7 +98,8 @@ class Database:
                     "file_hash": s.file_hash, "format": s.format, "file_size": s.file_size,
                     "duration_sec": s.duration_sec, "samplerate": s.samplerate, "channels": s.channels,
                     "bpm": s.bpm, "musical_key": s.musical_key, "key_scale": s.key_scale,
-                    "loudness_lufs": s.loudness_lufs, "category": s.category, "mood": s.mood,
+                    "loudness_lufs": s.loudness_lufs, "category": s.category,
+                    "instrument_class": s.instrument_class, "mood": s.mood,
                     "waveform_preview": s.waveform_preview,
                     "vec": blob, "dim": dim, "analyzed_at": s.analyzed_at,
                     "created_at": s.created_at or now, "indexed_at": now,
@@ -216,6 +220,60 @@ class Database:
             ).fetchall()
         return [r["name"] for r in rows]
 
+    def remove_tag(self, sample_id: int, name: str) -> None:
+        with self.lock:
+            self.conn.execute(
+                "DELETE FROM sample_tags WHERE sample_id=? AND tag_id="
+                "(SELECT id FROM tags WHERE name=?)",
+                (sample_id, name),
+            )
+            self.conn.commit()
+
+    def set_tags_for(self, sample_id: int, tags: list[str]) -> None:
+        """Replace a sample's tags with the given set in a single transaction."""
+        desired = sorted(set(tags))
+        with self.lock:
+            for name in desired:
+                self.conn.execute("INSERT OR IGNORE INTO tags(name) VALUES(?)", (name,))
+            self.conn.execute("DELETE FROM sample_tags WHERE sample_id=?", (sample_id,))
+            if desired:
+                self.conn.executemany(
+                    "INSERT OR IGNORE INTO sample_tags(sample_id, tag_id) "
+                    "SELECT ?, id FROM tags WHERE name=?",
+                    [(sample_id, name) for name in desired],
+                )
+            self.conn.commit()
+
+    def all_tags(self) -> list[str]:
+        with self.lock:
+            rows = self.conn.execute("SELECT name FROM tags ORDER BY name").fetchall()
+        return [r["name"] for r in rows]
+
+    def delete_sample(self, sample_id: int) -> None:
+        with self.lock:
+            self.conn.execute("DELETE FROM samples WHERE id=?", (sample_id,))
+            self.conn.execute(
+                "DELETE FROM favorites WHERE kind='sample' AND ref=?",
+                (str(sample_id),),
+            )
+            self.conn.commit()
+
+    def update_sample_location(self, sample_id: int, new_path: str, new_filename: str) -> None:
+        with self.lock:
+            self.conn.execute(
+                "UPDATE samples SET path=?, filename=? WHERE id=?",
+                (new_path, new_filename, sample_id),
+            )
+            self.conn.commit()
+
+    def set_classification(self, sample_id: int, category: str | None, instrument_class: str | None) -> None:
+        with self.lock:
+            self.conn.execute(
+                "UPDATE samples SET category=?, instrument_class=? WHERE id=?",
+                (category, instrument_class, sample_id),
+            )
+            self.conn.commit()
+
     # --- favorites ------------------------------------------------------
     def add_favorite(self, kind: str, ref: str) -> None:
         with self.lock:
@@ -268,13 +326,13 @@ class Database:
     # --- recent folders -------------------------------------------------
     def touch_recent_folder(self, path: str) -> None:
         with self.lock:
-            next_seq = self.conn.execute(
-                "SELECT COALESCE(MAX(seq), 0) + 1 FROM recent_folders"
-            ).fetchone()[0]
+            # Single statement keeps seq assignment atomic (no SELECT-then-INSERT
+            # TOCTOU window). The subquery's MAX is evaluated before the insert.
             self.conn.execute(
-                "INSERT INTO recent_folders(path, opened_at, seq) VALUES(?,?,?) "
+                "INSERT INTO recent_folders(path, opened_at, seq) "
+                "VALUES(?, ?, (SELECT COALESCE(MAX(seq), 0) + 1 FROM recent_folders)) "
                 "ON CONFLICT(path) DO UPDATE SET opened_at=excluded.opened_at, seq=excluded.seq",
-                (path, _now(), next_seq),
+                (path, _now()),
             )
             self.conn.execute(
                 "DELETE FROM recent_folders WHERE path NOT IN "

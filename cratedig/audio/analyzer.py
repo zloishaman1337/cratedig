@@ -29,6 +29,8 @@ class Descriptors:
     loudness_lufs: float | None = None
     waveform_preview: str | None = None
     vector: np.ndarray | None = None
+    centroid_norm: float | None = None
+    zcr: float | None = None
 
 
 def _require_librosa():
@@ -85,6 +87,18 @@ def analyze(path: str, sr: int = 22050) -> Descriptors:
         try:
             rms = librosa.feature.rms(y=y)
             d.loudness_lufs = round(float(20 * np.log10(np.mean(rms) + 1e-9)), 2)
+        except Exception:
+            pass
+
+        try:
+            c = librosa.feature.spectral_centroid(y=y, sr=sr)
+            d.centroid_norm = float(np.mean(c)) / max(1.0, sr / 2.0)
+        except Exception:
+            pass
+
+        try:
+            z = librosa.feature.zero_crossing_rate(y)
+            d.zcr = float(np.mean(z))
         except Exception:
             pass
 

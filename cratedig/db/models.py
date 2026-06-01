@@ -22,6 +22,7 @@ class Sample:
     key_scale: str | None = None
     loudness_lufs: float | None = None
     category: str | None = None
+    instrument_class: str | None = None
     mood: str | None = None
     waveform_preview: str | None = None
     feature_dim: int | None = None

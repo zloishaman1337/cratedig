@@ -14,7 +14,7 @@ from typing import Callable, Iterator
 
 from ..db import Database
 from ..db.models import Sample
-from ..audio.category import classify_category
+from ..audio.category import classify_category, classify_instrument
 
 
 def _sha1(path: Path, chunk: int = 1 << 20) -> str:
@@ -76,6 +76,7 @@ def index_file(db: Database, path: Path, source: str = "local") -> int | None:
         samplerate=meta["samplerate"],
         channels=meta["channels"],
         category=classify_category(path),
+        instrument_class=classify_instrument(path),
         created_at=now,
     )
     return db.upsert_sample(sample)
@@ -122,6 +123,7 @@ def scan_directory(
             samplerate=meta["samplerate"],
             channels=meta["channels"],
             category=classify_category(fp),
+            instrument_class=classify_instrument(fp),
             created_at=now,
         )
         db.upsert_sample(sample)

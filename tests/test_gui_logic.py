@@ -6,7 +6,10 @@ import numpy as np
 import pytest
 
 from cratedig.db.models import Sample
-from cratedig.gui.logic import compute_peaks, hit_rows, tree_rows, is_sample_favorite
+from cratedig.gui.logic import (
+    compute_peaks, filename_parts, hit_rows, resolve_similar, tree_rows,
+    is_sample_favorite, similar_name, format_metadata,
+)
 from cratedig.sources.base import SearchHit
 from cratedig.tui.browser import FolderNode
 
@@ -14,6 +17,337 @@ from cratedig.tui.browser import FolderNode
 def _make_sample(sample_id: int, filename: str) -> Sample:
     """Minimal Sample factory for testing."""
     return Sample(id=sample_id, path=f"/test/{filename}", filename=filename)
+
+
+class TestSimilarName:
+    """Test similar_name(path) -> str with stem + parent."""
+
+    def test_simple_path(self):
+        """Test basic file path returns stem and parent dir."""
+        result = similar_name("/packs/drums/kick.wav")
+        assert "kick" in result
+        assert "drums" in result
+        assert "·" in result
+
+    def test_stem_only_no_extension(self):
+        """Stem should not include file extension."""
+        result = similar_name("/packs/bass/bass_01.wav")
+        assert "bass_01" in result
+        assert ".wav" not in result
+
+    def test_parent_directory_name(self):
+        """Parent directory should appear in output."""
+        result = similar_name("/library/samples/snare.wav")
+        assert "samples" in result
+
+    def test_deep_path(self):
+        """Works with deeply nested paths."""
+        result = similar_name("/packs/drums/kicks/acoustic_kick.wav")
+        # Parent of the file is "kicks", so "kicks" should appear
+        assert "acoustic_kick" in result
+        assert "kicks" in result
+
+    def test_format_with_separator(self):
+        """Output should contain the separator ·."""
+        result = similar_name("/packs/drums/kick.wav")
+        assert "·" in result
+
+    def test_root_level_file(self):
+        """Files at root level should still work."""
+        result = similar_name("/kick.wav")
+        assert "kick" in result
+
+
+class TestFormatMetadata:
+    """Test format_metadata(sample, embedded) -> list[(label, value)] filtering."""
+
+    def test_returns_list_of_tuples(self):
+        """format_metadata returns list of (label, value) tuples."""
+        sample = Sample(id=1, path="/a/kick.wav", filename="kick.wav")
+        result = format_metadata(sample, None)
+        assert isinstance(result, list)
+        for item in result:
+            assert isinstance(item, tuple)
+            assert len(item) == 2
+
+    def test_skips_none_fields(self):
+        """None values should not appear in output."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            format="wav", samplerate=None, bpm=None
+        )
+        result = format_metadata(sample, None)
+        # Check that no None values leak into the output
+        for label, value in result:
+            assert value is not None
+            assert value != ""
+
+    def test_includes_format(self):
+        """Format field should be included when set."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            format="wav"
+        )
+        result = format_metadata(sample, None)
+        labels = [label for label, _ in result]
+        assert "Format" in labels
+
+    def test_samplerate_formatted_with_hz(self):
+        """Sample rate should be formatted as 'X Hz'."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            samplerate=44100
+        )
+        result = format_metadata(sample, None)
+        found = False
+        for label, value in result:
+            if label == "Sample rate":
+                assert value == "44100 Hz"
+                found = True
+        assert found
+
+    def test_duration_formatted_as_mmss(self):
+        """Duration should be formatted as 'MM:SS'."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            duration_sec=125.5  # 2 min 5.5 sec
+        )
+        result = format_metadata(sample, None)
+        found = False
+        for label, value in result:
+            if label == "Duration":
+                assert value == "2:05"  # 2 min 5 sec (truncated)
+                found = True
+        assert found
+
+    def test_duration_short(self):
+        """Short duration should still format correctly."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            duration_sec=45.0  # 45 sec
+        )
+        result = format_metadata(sample, None)
+        found = False
+        for label, value in result:
+            if label == "Duration":
+                assert value == "0:45"
+                found = True
+        assert found
+
+    def test_file_size_in_kb(self):
+        """File size under 1 MB should be shown in KB."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            file_size=100_000  # ~98 KB
+        )
+        result = format_metadata(sample, None)
+        found = False
+        for label, value in result:
+            if label == "Size":
+                assert "KB" in value
+                found = True
+        assert found
+
+    def test_file_size_in_mb(self):
+        """File size over 1 MB should be shown in MB."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            file_size=5_000_000  # ~5 MB
+        )
+        result = format_metadata(sample, None)
+        found = False
+        for label, value in result:
+            if label == "Size":
+                assert "MB" in value
+                found = True
+        assert found
+
+    def test_bpm_formatted(self):
+        """BPM should be included and formatted."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            bpm=120.5
+        )
+        result = format_metadata(sample, None)
+        found = False
+        for label, value in result:
+            if label == "BPM":
+                assert "120" in value
+                found = True
+        assert found
+
+    def test_key_and_scale(self):
+        """Key and scale should be combined."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            musical_key="C", key_scale="minor"
+        )
+        result = format_metadata(sample, None)
+        found = False
+        for label, value in result:
+            if label == "Key":
+                assert "C" in value
+                assert "minor" in value
+                found = True
+        assert found
+
+    def test_key_only_no_scale(self):
+        """Key with no scale should still appear."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            musical_key="A", key_scale=None
+        )
+        result = format_metadata(sample, None)
+        found = False
+        for label, value in result:
+            if label == "Key":
+                assert "A" in value
+                found = True
+        assert found
+
+    def test_loudness_lufs(self):
+        """Loudness should be shown in LUFS."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            loudness_lufs=-12.5
+        )
+        result = format_metadata(sample, None)
+        found = False
+        for label, value in result:
+            if label == "Loudness":
+                assert "LUFS" in value
+                assert "-12" in value
+                found = True
+        assert found
+
+    def test_category_and_instrument_class(self):
+        """Category and instrument_class should appear as 'Category' and 'Class'."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            category="drum", instrument_class="kick"
+        )
+        result = format_metadata(sample, None)
+        labels = [label for label, _ in result]
+        assert "Category" in labels
+        assert "Class" in labels
+
+    def test_source_field(self):
+        """Source field should be included when set."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            source="freesound"
+        )
+        result = format_metadata(sample, None)
+        found = False
+        for label, value in result:
+            if label == "Source":
+                assert value == "freesound"
+                found = True
+        assert found
+
+    def test_embedded_dict_appended(self):
+        """Embedded dict with metadata should be appended."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            format="wav"
+        )
+        embedded = {
+            "artist": "Sample Pack Ltd",
+            "title": "Kick 01",
+            "album": "Drums Vol 1",
+            "genre": "Drum and Bass",
+            "date": "2023",
+        }
+        result = format_metadata(sample, embedded)
+
+        # Should have an empty row separator
+        found_separator = False
+        for label, value in result:
+            if label == "" and value == "":
+                found_separator = True
+                break
+        assert found_separator
+
+        # Should have artist, title, etc. after separator
+        labels = [label for label, _ in result]
+        assert "Artist" in labels
+        assert "Title" in labels
+        assert "Album" in labels
+        assert "Genre" in labels
+        assert "Year" in labels
+
+    def test_embedded_skips_none_values(self):
+        """Embedded dict with None/empty values should be skipped."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            format="wav"
+        )
+        embedded = {
+            "artist": "Sample Pack Ltd",
+            "title": None,
+            "album": "",
+            "genre": "Drum and Bass",
+        }
+        result = format_metadata(sample, embedded)
+
+        # title and album should not appear
+        labels = [label for label, _ in result]
+        assert "Artist" in labels
+        assert "Genre" in labels
+        # No label for title/album (they were None or empty)
+        found_title = any(label == "Title" for label, _ in result)
+        found_album = any(label == "Album" for label, _ in result)
+        assert not found_title
+        assert not found_album
+
+    def test_empty_sample_minimal_output(self):
+        """Sample with all None fields should produce minimal output."""
+        sample = Sample(
+            id=1, path="/a/file.wav", filename="file.wav"
+        )
+        result = format_metadata(sample, None)
+        # Should have very few entries (mostly None/empty fields)
+        # Just checking it doesn't crash and returns a list
+        assert isinstance(result, list)
+
+    def test_all_fields_filled(self):
+        """Sample with all fields filled should include all of them."""
+        sample = Sample(
+            id=1, path="/a/kick.wav", filename="kick.wav",
+            format="wav", samplerate=48000, channels=2,
+            duration_sec=60.0, file_size=5_000_000,
+            bpm=128.0, musical_key="D", key_scale="major",
+            loudness_lufs=-10.0, category="drum",
+            instrument_class="kick", source="local"
+        )
+        result = format_metadata(sample, None)
+        labels = [label for label, _ in result]
+
+        # Check for key fields
+        assert "Format" in labels
+        assert "Sample rate" in labels
+        assert "Channels" in labels
+        assert "Duration" in labels
+        assert "Size" in labels
+        assert "BPM" in labels
+        assert "Key" in labels
+        assert "Loudness" in labels
+        assert "Category" in labels
+        assert "Class" in labels
+        assert "Source" in labels
+
+
+class TestFilenameParts:
+    """Test filename_parts(filename) -> (stem, suffix)."""
+
+    def test_splits_filename_and_extension(self):
+        assert filename_parts("kick.wav") == ("kick", ".wav")
+
+    def test_splits_only_final_extension(self):
+        assert filename_parts("kick.v2.wav") == ("kick.v2", ".wav")
+
+    def test_filename_without_extension(self):
+        assert filename_parts("kick") == ("kick", "")
 
 
 class TestComputePeaks:
@@ -168,21 +502,23 @@ class TestComputePeaks:
 class TestTreeRows:
     """Test tree_rows(nodes: dict, favorites: list) -> list[tuple]."""
 
-    def test_empty_nodes_empty_favorites_returns_favorites_root_only(self):
-        """Empty input should return exactly one row: the ★ Favorites root with no children."""
+    def test_empty_nodes_empty_favorites_returns_favorites_and_library_roots(self):
+        """Empty input should return the ★ Favorites root and the Library root."""
         nodes = {}
         favorites = []
 
         result = tree_rows(nodes, favorites)
 
-        # Should have exactly one row: the ★ Favorites root
-        assert len(result) == 1
+        # Should have exactly two rows: ★ Favorites root + Library root
+        assert len(result) == 2
 
         parent_key, key, label, is_favorites_branch = result[0]
         assert parent_key is None
         assert key == "__favorites__"
         assert label == "★ Favorites"
         assert is_favorites_branch is True
+
+        assert result[1] == (None, "__library__", "Library", False)
 
     def test_favorites_branch_always_first(self):
         """Favorites branch should always appear first, even with folder nodes."""
@@ -205,8 +541,8 @@ class TestTreeRows:
 
         result = tree_rows(nodes, favorites)
 
-        # Should have 2 rows: root + 1 child
-        assert len(result) == 2
+        # Should have 3 rows: ★ root + 1 child + Library root
+        assert len(result) == 3
 
         # First row: ★ Favorites root
         assert result[0] == (None, "__favorites__", "★ Favorites", True)
@@ -218,6 +554,9 @@ class TestTreeRows:
         assert label == "kick.wav"
         assert is_fav_branch is True
 
+        # Third row: Library root
+        assert result[2] == (None, "__library__", "Library", False)
+
     def test_multiple_favorites_in_order(self):
         """Multiple favorites should appear in order after root."""
         nodes = {}
@@ -227,8 +566,8 @@ class TestTreeRows:
 
         result = tree_rows(nodes, favorites)
 
-        # Should have 3 rows: root + 2 children
-        assert len(result) == 3
+        # Should have 4 rows: ★ root + 2 children + Library root
+        assert len(result) == 4
 
         # First row: root
         assert result[0][1] == "__favorites__"
@@ -236,6 +575,9 @@ class TestTreeRows:
         # Second and third: favorites in order
         assert result[1] == ("__favorites__", "fav:10", "snare.wav", True)
         assert result[2] == ("__favorites__", "fav:20", "kick.wav", True)
+
+        # Fourth row: Library root
+        assert result[3] == (None, "__library__", "Library", False)
 
     def test_simple_folder_nodes_nested_structure(self):
         """Nested folders should appear in parent-before-child order, sorted by key."""
@@ -266,16 +608,20 @@ class TestTreeRows:
 
         result = tree_rows(nodes, favorites)
 
-        # Should have 4 rows: ★ Favorites root + 3 folder rows
-        assert len(result) == 4
+        # Should have 5 rows: ★ Favorites root + Library root + 3 folder rows
+        assert len(result) == 5
 
-        # First row: ★ Favorites root
+        # First row: ★ Favorites root, second: Library root
         assert result[0][1] == "__favorites__"
+        assert result[1][1] == "__library__"
 
         # Folder rows should follow, sorted by key
-        folder_rows = result[1:]
+        folder_rows = result[2:]
         keys = [row[1] for row in folder_rows]
         assert keys == ["packs", "packs/bass", "packs/drums"]
+
+        # Top-level folders are reparented under Library
+        assert folder_rows[0][0] == "__library__"
 
     def test_deeply_nested_folders_parent_before_child(self):
         """Deeply nested folders: parent must appear before child."""
@@ -306,8 +652,8 @@ class TestTreeRows:
 
         result = tree_rows(nodes, favorites)
 
-        # Skip ★ Favorites root and check folder order
-        folder_rows = result[1:]
+        # Skip ★ Favorites + Library roots and check folder order
+        folder_rows = result[2:]
         keys = [row[1] for row in folder_rows]
 
         # Parent must come before children
@@ -336,11 +682,11 @@ class TestTreeRows:
 
         result = tree_rows(nodes, favorites)
 
-        # Find folder rows (skip ★ Favorites root at index 0)
-        packs_row = result[1]
-        drums_row = result[2]
+        # Find folder rows (skip ★ Favorites + Library roots at index 0, 1)
+        packs_row = result[2]
+        drums_row = result[3]
 
-        assert packs_row[0] is None  # packs is top-level
+        assert packs_row[0] == "__library__"  # top-level folders sit under Library
         assert packs_row[1] == "packs"
 
         assert drums_row[0] == "packs"  # drums parent is packs
@@ -361,8 +707,8 @@ class TestTreeRows:
 
         result = tree_rows(nodes, favorites)
 
-        # Find drums row (skip ★ Favorites root)
-        drums_row = result[1]
+        # Find drums row (skip ★ Favorites + Library roots)
+        drums_row = result[2]
         label = drums_row[2]
 
         assert label == "drums"  # Should be the name, not "packs/drums"
@@ -382,8 +728,8 @@ class TestTreeRows:
 
         result = tree_rows(nodes, favorites)
 
-        # Find packs row (skip ★ Favorites root)
-        packs_row = result[1]
+        # Find packs row (skip ★ Favorites + Library roots)
+        packs_row = result[2]
         is_fav_branch = packs_row[3]
 
         assert is_fav_branch is False
@@ -410,9 +756,12 @@ class TestTreeRows:
         assert result[1][1] == "fav:1"
         assert result[2][1] == "fav:2"
 
-        # Fourth row should be folder
-        assert result[3][1] == "packs"
-        assert result[3][3] is False  # is_favorites_branch
+        # Library root precedes folder rows
+        assert result[3][1] == "__library__"
+
+        # Fifth row should be the folder
+        assert result[4][1] == "packs"
+        assert result[4][3] is False  # is_favorites_branch
 
     def test_multiple_favorites_with_nested_folders(self):
         """Favorites + folders: favorites first, then folders in parent-before-child order."""
@@ -437,15 +786,16 @@ class TestTreeRows:
 
         result = tree_rows(nodes, favorites)
 
-        # Expected order: ★ root, fav1, packs, packs/drums
+        # Expected order: ★ root, fav1, Library root, packs, packs/drums
         keys = [row[1] for row in result]
-        assert keys == ["__favorites__", "fav:100", "packs", "packs/drums"]
+        assert keys == ["__favorites__", "fav:100", "__library__", "packs", "packs/drums"]
 
         # Check is_favorites_branch flags
         assert result[0][3] is True  # ★ root
         assert result[1][3] is True  # fav1
-        assert result[2][3] is False  # packs
-        assert result[3][3] is False  # packs/drums
+        assert result[2][3] is False  # Library root
+        assert result[3][3] is False  # packs
+        assert result[4][3] is False  # packs/drums
 
     def test_folders_sorted_lexically_at_same_level(self):
         """Folders at the same nesting level should be sorted by key."""
@@ -476,8 +826,8 @@ class TestTreeRows:
 
         result = tree_rows(nodes, favorites)
 
-        # Skip ★ Favorites root and check folder order
-        folder_keys = [row[1] for row in result[1:]]
+        # Skip ★ Favorites + Library roots and check folder order
+        folder_keys = [row[1] for row in result[2:]]
         assert folder_keys == ["apple", "monkey", "zebra"]
 
     def test_complex_scenario_favorites_and_nested_folders(self):
@@ -515,14 +865,16 @@ class TestTreeRows:
         # 1. ★ Favorites root
         # 2. fav:10
         # 3. fav:20
-        # 4. packs
-        # 5. packs/drums
-        # 6. packs/drums/kicks
+        # 4. Library root
+        # 5. packs
+        # 6. packs/drums
+        # 7. packs/drums/kicks
         keys = [row[1] for row in result]
         assert keys == [
             "__favorites__",
             "fav:10",
             "fav:20",
+            "__library__",
             "packs",
             "packs/drums",
             "packs/drums/kicks",
@@ -532,13 +884,14 @@ class TestTreeRows:
         assert result[0][0] is None  # ★ root
         assert result[1][0] == "__favorites__"  # fav:10
         assert result[2][0] == "__favorites__"  # fav:20
-        assert result[3][0] is None  # packs (top-level)
-        assert result[4][0] == "packs"  # packs/drums
-        assert result[5][0] == "packs/drums"  # packs/drums/kicks
+        assert result[3][0] is None  # Library root (top-level)
+        assert result[4][0] == "__library__"  # packs sits under Library
+        assert result[5][0] == "packs"  # packs/drums
+        assert result[6][0] == "packs/drums"  # packs/drums/kicks
 
         # Verify is_favorites_branch
         is_fav_flags = [row[3] for row in result]
-        assert is_fav_flags == [True, True, True, False, False, False]
+        assert is_fav_flags == [True, True, True, False, False, False, False]
 
 
 class TestHitRows:
@@ -589,3 +942,25 @@ class TestIsSampleFavorite:
         favorites_by_id = {}
         assert is_sample_favorite(favorites_by_id, 1) is False
         assert is_sample_favorite(favorites_by_id, 42) is False
+
+
+class TestResolveSimilar:
+    """Test resolve_similar(hits, samples_by_id) -> list[Sample] in hit order, None-filtered."""
+
+    def test_empty_hits_returns_empty(self):
+        assert resolve_similar([], {}) == []
+
+    def test_preserves_hit_order(self):
+        s1 = _make_sample(1, "a.wav")
+        s2 = _make_sample(2, "b.wav")
+        s3 = _make_sample(3, "c.wav")
+        by_id = {1: s1, 2: s2, 3: s3}
+        # hits ranked 3, 1, 2 by similarity score
+        hits = [(3, 0.99), (1, 0.80), (2, 0.50)]
+        assert resolve_similar(hits, by_id) == [s3, s1, s2]
+
+    def test_skips_missing_ids(self):
+        s1 = _make_sample(1, "a.wav")
+        by_id = {1: s1, 2: None}  # id 2 unresolved (deleted between query and fetch)
+        hits = [(2, 0.9), (1, 0.7), (99, 0.6)]
+        assert resolve_similar(hits, by_id) == [s1]

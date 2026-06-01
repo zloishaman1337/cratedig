@@ -26,7 +26,8 @@ CREATE TABLE IF NOT EXISTS samples (
     musical_key   TEXT,                            -- e.g. 'A'
     key_scale     TEXT,                            -- 'major' | 'minor'
     loudness_lufs REAL,
-    category      TEXT,                            -- drum/bass/synth/vocal/... (future auto-classify)
+    category      TEXT,                            -- oneshot/loop/drum/bass/synth/pad/vocal/fx
+    instrument_class TEXT,                         -- kick/snare/hat/clap/tom/cymbal/perc (auto-classified)
     mood          TEXT,
     waveform_preview TEXT,                         -- compact TUI row preview
 

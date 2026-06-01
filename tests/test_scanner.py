@@ -31,7 +31,10 @@ def test_scan_indexes_wav(tmp_path):
     s = db.all_samples()[0]
     assert s.format == "wav"
     assert s.file_hash and len(s.file_hash) == 40
-    assert {sample.category for sample in db.all_samples()} == {"kick", None}
+    # kick_01.wav has instrument_class="kick" and category=None
+    # b.wav has both category=None and instrument_class=None
+    assert {sample.category for sample in db.all_samples()} == {None}
+    assert {sample.instrument_class for sample in db.all_samples()} == {None, "kick"}
     db.close()
 
 

@@ -3,7 +3,8 @@
 from __future__ import annotations
 
 import numpy as np
-from PySide6.QtGui import QPainter, QPen, QColor
+from PySide6.QtCore import QPointF
+from PySide6.QtGui import QPainter, QPen, QColor, QPolygonF
 from PySide6.QtWidgets import QWidget
 
 from .logic import compute_peaks
@@ -58,22 +59,25 @@ class WaveformPane(QWidget):
             painter.end()
             return
 
-        pen = QPen(QColor(80, 160, 80))
-        pen.setWidth(1)
-        painter.setPen(pen)
-
         # Scale amplitude to widget height, clamping to [-1, 1]
         scale = mid * 0.95
         n = len(self._peaks)
-        for i, (lo, hi) in enumerate(self._peaks):
-            x_px = int(i * w / n)
+
+        # Build a continuous filled envelope: top contour left→right, then
+        # bottom contour right→left. Map every pixel column to a peak so the
+        # outline never breaks even when n != w.
+        top: list[QPointF] = []
+        bot: list[QPointF] = []
+        for x in range(w):
+            lo, hi = self._peaks[min(n - 1, x * n // w)]
             lo_c = max(-1.0, min(1.0, float(lo)))
             hi_c = max(-1.0, min(1.0, float(hi)))
-            y_top = int(mid - hi_c * scale)
-            y_bot = int(mid - lo_c * scale)
-            if y_top == y_bot:
-                painter.drawPoint(x_px, y_top)
-            else:
-                painter.drawLine(x_px, y_top, x_px, y_bot)
+            top.append(QPointF(x, mid - hi_c * scale))
+            bot.append(QPointF(x, mid - lo_c * scale))
+
+        poly = QPolygonF(top + bot[::-1])
+        painter.setPen(QPen(QColor(80, 160, 80), 1))
+        painter.setBrush(QColor(80, 160, 80))
+        painter.drawPolygon(poly)
 
         painter.end()
