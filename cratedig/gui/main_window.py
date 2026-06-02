@@ -7,12 +7,14 @@ import subprocess
 
 from PySide6.QtCore import QMetaObject, QThread, Qt, Q_ARG, Signal
 from PySide6.QtWidgets import (
+    QButtonGroup,
     QCheckBox,
     QFileDialog,
     QInputDialog,
     QMainWindow,
     QMessageBox,
     QSplitter,
+    QStackedWidget,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
@@ -33,6 +35,7 @@ from .tag_editor import TagEditor
 from .tree_pane import TreePane
 from .waveform_pane import WaveformPane
 from .worker import IndexWorker
+from .als_explorer import AlsExplorerPanel
 
 
 class MainWindow(QMainWindow):
@@ -137,7 +140,41 @@ class MainWindow(QMainWindow):
         main_splitter.addWidget(top_splitter)
         main_splitter.addWidget(self._download_pane)
         main_splitter.setSizes([500, 200])
-        self.setCentralWidget(main_splitter)
+
+        # --- stacked pages: 0 = samples, 1 = Ableton (ALS) explorer ---
+        self._als_panel = AlsExplorerPanel()
+        self._pages = QStackedWidget()
+        self._pages.addWidget(main_splitter)    # index 0 — samples
+        self._pages.addWidget(self._als_panel)  # index 1 — Ableton
+
+        # --- left sidebar navigator (always visible) ---
+        self._nav_samples = QPushButton("Samples")
+        self._nav_ableton = QPushButton("Ableton")
+        self._nav_group = QButtonGroup(self)
+        self._nav_group.setExclusive(True)
+        for idx, btn in enumerate((self._nav_samples, self._nav_ableton)):
+            btn.setCheckable(True)
+            btn.setMinimumHeight(40)
+            self._nav_group.addButton(btn, idx)
+        self._nav_samples.setChecked(True)
+        self._nav_group.idClicked.connect(self._pages.setCurrentIndex)
+
+        sidebar = QWidget()
+        sidebar.setFixedWidth(96)
+        sidebar_layout = QVBoxLayout(sidebar)
+        sidebar_layout.setContentsMargins(6, 6, 6, 6)
+        sidebar_layout.setSpacing(4)
+        sidebar_layout.addWidget(self._nav_samples)
+        sidebar_layout.addWidget(self._nav_ableton)
+        sidebar_layout.addStretch()
+
+        central = QWidget()
+        central_layout = QHBoxLayout(central)
+        central_layout.setContentsMargins(0, 0, 0, 0)
+        central_layout.setSpacing(0)
+        central_layout.addWidget(sidebar)
+        central_layout.addWidget(self._pages, stretch=1)
+        self.setCentralWidget(central)
 
         # --- toolbar (Duplicates only; Favorite moved to btn bar) ---
         toolbar = QToolBar("Actions")

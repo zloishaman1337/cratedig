@@ -114,6 +114,18 @@ class Database:
             row = self.conn.execute("SELECT * FROM samples WHERE id=?", (sample_id,)).fetchone()
         return Sample.from_row(row) if row else None
 
+    def get_samples_by_ids(self, sample_ids: list[int]) -> dict[int, Sample]:
+        """Return samples keyed by id, preserving caller-controlled ordering outside SQL."""
+        ids = list(dict.fromkeys(sample_ids))
+        if not ids:
+            return {}
+        placeholders = ",".join("?" for _ in ids)
+        with self.lock:
+            rows = self.conn.execute(
+                f"SELECT * FROM samples WHERE id IN ({placeholders})", ids
+            ).fetchall()
+        return {int(row["id"]): Sample.from_row(row) for row in rows}
+
     def all_samples(self, limit: int = 1000) -> list[Sample]:
         with self.lock:
             rows = self.conn.execute(

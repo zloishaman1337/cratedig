@@ -92,11 +92,12 @@ Tables: `samples`, `tags`, `sample_tags`, `downloads`, `metadata`, `meta`.
 
 ## Not done yet (roadmap)
 
-- Auto-classification (drum/bass/synth/…) → `samples.category`.
+- Auto-classification (drum/bass/synth/…) → `samples.category`. **DONE** (filename + audio fallback).
 - Duplicate-detection UI over `file_hash`.
-- In-TUI audio playback / waveform.
-- Download screen + metadata enrichment wired into TUI.
+- In-TUI audio playback / waveform. **DONE** (TUI + GUI).
+- Download screen + metadata enrichment wired into TUI. **PARTIAL** (download done; metadata still unwired — see Roadmap v2 §6).
 - hnswlib ANN index for large libraries.
+- **Roadmap v2 epics (planned, this planning session): see section below.**
 
 ---
 
@@ -159,12 +160,81 @@ must not reference it.
 | `tree_pane.py`     | `TreePane(QTreeWidget)`: renders `tree_rows`, emits folder-selected.             | yes |
 | `sample_table.py`  | `SampleTable(QTableView/QTableWidget)`: lists a folder's samples, emits selection. | yes |
 | `waveform_pane.py` | `WaveformPane(QWidget)`: `paintEvent` draws min/max peaks from `compute_peaks`.   | yes |
-| `main_window.py`   | `MainWindow(QMainWindow)`: wires panes ↔ worker ↔ player; owns the layout.       | yes |
+| `main_window.py`   | `MainWindow(QMainWindow)`: left sidebar (`QButtonGroup`: Samples/Ableton) + `QStackedWidget` (index 0 = samples splitter, index 1 = `AlsExplorerPanel`); wires panes ↔ worker ↔ player; owns the layout. | yes |
+| `als_explorer.py`  | `AlsExplorerPanel(QWidget)`: embedded ALS Explorer page inside MainWindow (see below). | yes |
 
 Layout rationale: the only files the **tester** targets are `logic.py` (pure,
 Qt-free, fully unit-testable) and the documented signal/return shapes. All Qt
 widgets stay thin so the testable logic is concentrated in one module — this avoids
 needing a Qt event loop in the test suite.
+
+### ALS Explorer component
+
+The ALS Explorer is an **embedded `QWidget` page** inside `MainWindow`, reachable
+via a permanent left sidebar navigator. The sidebar uses a `QButtonGroup` (exclusive
+toggle) with two buttons — "Samples" and "Ableton" — that switch a `QStackedWidget`:
+index 0 is the samples splitter (existing sample browser), index 1 is the
+`AlsExplorerPanel`. The old separate toolbar "Ableton" action and `_als_window`
+attribute were removed. The toolbar now only holds Duplicates (D).
+
+The panel uses the **native Qt theme**: text color inherits the application palette
+(`_colored_label(color="")` means inherit), card fills use translucent `rgba(...)`
+overlays that work across light and dark system themes, and semantic indicator colors
+(`C_OK`, `C_WARN`, `C_ERR`, `C_VST`, `C_M4L`, `C_SILENT`) are tuned for legibility
+in both modes. RU/EN language toggle buttons are native checkable `QPushButton`s.
+
+#### Package layout — `cratedig/als/`
+
+| module        | responsibility |
+|---------------|----------------|
+| `__init__.py` | package marker |
+| `parser.py`   | Pure stdlib parser (gzip + xml.etree). No external deps. Public API: `parse_als(path) -> dict` and `scan_vst_plugins(vst2_names, vst3_names) -> dict` (latter unused by GUI — dead app code). |
+
+`parse_als` returns:
+```
+{
+  "ableton_version": str,
+  "tracks": list[dict],        # each track: name, type, devices, instruments, plugins
+  "main": dict,                # master/main channel info + fader dB + instruments + plugins
+  "arrangement": dict,         # length in bars/seconds
+  "samples": {"found": [...], "missing": [...]}
+}
+```
+
+Every track dict and `main` include two aggregated lists:
+- `instruments`: display names of instruments on that channel (native, VST2, VST3, AU, M4L).
+- `plugins`: display names of effects/MIDI FX on that channel.
+
+Names are tagged `[VST2]`, `[VST3]`, `[AU]`, or `[M4L]`; native Live devices are plain.
+
+Supports Ableton Live 10/11/12 sets. Recurses instrument racks to depth ≤ 2. Detects
+"Collect All & Save" sample presence, computes arrangement length, reads master fader
+dB, and lists native devices, VST2/VST3, Audio Units (AU), and Max for Live (M4L) devices.
+
+**Plugin classification:**
+- `AuPluginDevice` (macOS Audio Units): classified via `ComponentType` fourcc — `aumu` = instrument, anything else = effect; `NumAudioInputs == 0` as fallback; `struct.error` caught on malformed fourcc.
+- `PluginDevice` (VST2/VST3): VST3 classified via `DeviceType` attribute (1 = instrument, 2 = effect); VST2 uses `NumAudioInputs == 0` fallback.
+
+#### `cratedig/gui/als_explorer.py` — Qt panel
+
+`AlsExplorerPanel(QWidget)` provides:
+- **Header bar**: "Open .als" file button + RU/EN i18n toggle (module-global `_LANG`;
+  `T()` reads it — single-panel-instance contract). Language buttons are native
+  checkable `QPushButton`s.
+- **Info area + tabs** split by a vertical `QSplitter` (user-draggable): info area
+  (top ~50%) holds the MAIN CHANNEL card (fader-dB with color logic), summary
+  (arrangement length + 3rd-party device count), and expandable Samples found/missing
+  section; tabs (bottom ~50%) are a 3-tab `QTabWidget`.
+- **3-tab `QTabWidget`**: Instruments / Plugins / Tracks. Instruments and Plugins are
+  built from the parser's aggregated `instruments`/`plugins` keys; Tracks lists all
+  tracks by name and type.
+- **Drag & drop**: `setAcceptDrops(True)`; accepts `.als` files dragged onto the panel.
+
+#### Dependency note
+
+`cratedig/als/parser.py` uses only the Python standard library (gzip, xml.etree).
+No new package dependency is introduced; the panel rides on the existing `[gui]`
+PySide6 extra.
 
 ### DECISION A — Waveform peak source (CONFIRMED, refined)
 
@@ -395,3 +465,248 @@ message rather than an import error at startup — identical to the existing opt
   decode-only thread is a later option if scrubbing feels slow.
 - **Logic concentrated in `logic.py`**: keeps the test suite Qt-free, at the cost
   of slightly thinner widgets that delegate computation outward.
+
+---
+
+# Roadmap v2 — planned feature epics (2026-06)
+
+Six epics planned in a design-only session. Decisions locked with the user are
+flagged **[DECIDED]**. No code was written for these yet; this section is the build
+contract. Order below is the recommended implementation order (5 → 2 → 1 → 3 → 6 → 4):
+the cheap surgical wins first, the Simpler epic last.
+
+Cross-cutting principle (unchanged from v1): all heavy DSP / DB / FS work stays on
+the `IndexWorker` thread; pure, Qt-free computation lives in `gui/logic.py` or new
+`audio/*` modules so it stays unit-testable; schema changes are additive and applied
+idempotently via `_ensure_*` migrations.
+
+## §5 — Remove duplicated columns/fields (smallest, do first)
+
+Pure UI trim, no schema, no logic risk.
+
+- `gui/sample_table.py`: drop `"Extension"` from `_COLUMNS` and its value in
+  `set_samples` (extension already shown as **Format** in the metadata panel).
+  Re-derive `_SIM_COL` / `_FNAME_COL` after the edit (index shift).
+- `gui/logic.py::format_metadata`: remove the **Duration**, **BPM**, and **Key**
+  rows (all three already columns in the table). Keep Format / Sample rate /
+  Channels / Size / Mood / embedded tags.
+- Tests to update: GUI smoke test asserting `10 table cols` → `9`; any
+  `format_metadata` assertion referencing Duration/BPM/Key.
+
+Acceptance: table has 9 columns (no Extension); metadata panel shows no
+Duration/BPM/Key line; suite green.
+
+## §2 — Drag & Drop sample file → DAW
+
+Standard OS file-drag: the app hands the DAW a real filesystem path via
+`text/uri-list` (Windows CF_HDROP). No copy, no schema.
+
+- `gui/sample_table.py`: enable `setDragEnabled(True)`, override `startDrag` (or
+  install a `QDrag`): build `QMimeData` with
+  `setUrls([QUrl.fromLocalFile(s.path)])` for the selected row(s),
+  `drag.exec(Qt.CopyAction)`.
+- Pure helper in `gui/logic.py`: `file_urls(samples) -> list[str]` (returns local
+  file paths) — keeps URL list building testable; the widget wraps them in `QUrl`.
+- Multi-select rows → multiple URLs (groundwork shared with §3 crate-drag).
+
+Acceptance: drag a row into Explorer/DAW drops the original file; unit test on
+`file_urls` ordering + path passthrough.
+
+## §1 — Smarter character auto-tags (DSP heuristics) **[DECIDED: DSP, no ML]**
+
+Character descriptors stored as **tags** (existing `tags` / `sample_tags` tables),
+NOT as `category`/`instrument_class`. They appear in the Tags column and are already
+searchable (all-of tag filter in `search/query.py`).
+
+New pure module `audio/descriptors.py`:
+`derive_character_tags(y_mono, y_stereo, sr, scalars) -> list[str]`, fed the signal
++ the scalar block already computed in `audio/features.py::_scalar_features`
+(centroid, bandwidth, rolloff, zcr, flatness, crest, duration, envelope decay).
+
+Heuristic map (thresholds tuned during impl, table is the intent):
+
+| tag      | DSP signal |
+|----------|-----------|
+| `bright` | high spectral centroid (rolloff95 high) |
+| `dark`   | low spectral centroid |
+| `boomy`  | strong low-band energy + long envelope sustain |
+| `short`  | duration < ~0.4 s OR fast envelope decay |
+| `dry`    | low late-tail RMS ratio (energy concentrated early) |
+| `reverb` | high late-tail RMS ratio (long decay tail) |
+| `dirty`  | high spectral flatness / high crest noisiness |
+| `wide`   | low L/R correlation (**needs stereo decode**) |
+| `808`    | sustained low fundamental + harmonic + bass band |
+| `lofi`   | HF rolloff low + raised noise floor |
+
+**Gotcha — stereo:** `wide` needs L/R correlation but `extract_features` loads
+`mono=True`. Add a lightweight second decode (`mono=False`, channels averaged only
+for the existing vector) OR compute width in the same analyze pass before mono
+collapse. Width is the only stereo-dependent tag; everything else reuses mono.
+
+Genre-ish labels the user listed (`vinyl`, `acoustic`, `jazz`, `soul`) are weak for
+pure DSP — keep them **keyword-only** (filename) for now; an optional ML extra is a
+deferred phase-2 (explicitly out of scope this round per [DECIDED: DSP only]).
+
+Wiring: new `index.py::tag_pending(db, progress)` (mirrors `classify_pending`)
+writes derived tags. **Add `sample_tags.source TEXT DEFAULT 'manual'`** (migration)
+so re-running auto-tagging only clears/rewrites `source='auto'` rows and never wipes
+user tags. GUI/TUI: trigger alongside analyze; a "Re-tag" action optional.
+
+Acceptance: `derive_character_tags` unit-tested on synthetic signals (bright sine =
+`bright`, silence-padded tail = `reverb`, etc.); auto tags never overwrite manual.
+
+## §3 — Crates (playlists) **[DECIDED]**
+
+User-curated ordered collections of samples; draggable as a whole into a DAW.
+
+Schema (additive, `_ensure` migration):
+
+```sql
+CREATE TABLE IF NOT EXISTS crates (
+    id INTEGER PRIMARY KEY,
+    name TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+CREATE TABLE IF NOT EXISTS crate_samples (
+    crate_id  INTEGER NOT NULL REFERENCES crates(id) ON DELETE CASCADE,
+    sample_id INTEGER NOT NULL REFERENCES samples(id) ON DELETE CASCADE,
+    position  INTEGER NOT NULL,
+    added_at  TEXT NOT NULL,
+    PRIMARY KEY (crate_id, sample_id)
+);
+```
+
+`db/database.py` methods: `create_crate(name)`, `rename_crate`, `delete_crate`,
+`add_to_crate(crate_id, sample_id)`, `remove_from_crate`, `list_crates()`,
+`crate_samples(crate_id) -> list[Sample]` (ordered by `position`). All under
+`db.lock`.
+
+GUI:
+- `gui/logic.py::tree_rows` gains a synthetic **`📦 Crates`** branch (same pattern as
+  `★ Favorites`): one child row per crate, key namespace `crate:<id>`. Worker reads
+  crates under lock and passes them into `tree_rows` like favorites.
+- Selecting a crate row fills the table from `crate_samples(id)`.
+- `gui/sample_table.py` context menu: **"Add to crate ▸"** submenu listing crates +
+  **"New crate…"**.
+- Crate **whole-drag**: dragging a `crate:<id>` tree node builds `QMimeData` with
+  URLs of *all* member samples (reuses `file_urls` from §2). Tree node drag override
+  in `gui/tree_pane.py`; worker supplies member paths.
+
+Acceptance: create crate, add via context menu, crate appears in tree, drag crate
+drops all member files into DAW; DB methods unit-tested.
+
+## §6 — Tracks search fix + MB/Discogs local cache **[DECIDED: incremental cache; root cause = unwired metadata]**
+
+**Root cause** (confirmed in code): `sources/manager.py::search` for `mode="tracks"`
+iterates `TRACK_FALLBACK = ["yandex", "youtube"]` and **returns on the first backend
+that yields hits** — Yandex almost always does, so YouTube and the metadata
+providers are never consulted. `metadata/musicbrainz.py` + `discogs.py` exist but are
+not wired anywhere.
+
+Target behavior: in `tracks` mode, gather candidates from *all* audio backends, then
+cross-check each against canonical MusicBrainz + Discogs metadata to pick the most
+authoritative result (defeat re-uploads by preferring the earliest official release /
+matching duration), querying a **local incremental cache** instead of hitting the
+APIs on every search.
+
+Phased:
+
+- **6a — gather, don't stop:** `search("tracks")` collects hits from yandex AND
+  youtube (no early return); returns the merged list. Fixes the "only Yandex" bug
+  immediately, no metadata dependency.
+- **6b — wire MB/Discogs + rank:** for each candidate, look up `(artist, title)` in
+  MusicBrainz + Discogs; score by metadata match (title/artist/duration agreement,
+  earliest release year as authority signal); sort hits by score so the
+  most-authoritative source ranks first. Enrich `SearchHit` with the matched
+  metadata for display.
+- **6c — local incremental cache + launch refresh** **[DECIDED: incremental, not
+  full dump]**:
+
+  ```sql
+  CREATE TABLE IF NOT EXISTS metadata_cache (
+      id INTEGER PRIMARY KEY,
+      provider   TEXT NOT NULL,          -- musicbrainz | discogs
+      query_norm TEXT NOT NULL,          -- lowercased "artist|title"
+      response_json TEXT NOT NULL,
+      fetched_at TEXT NOT NULL,
+      UNIQUE(provider, query_norm)
+  );
+  ```
+
+  Lookup order: local `metadata_cache` first → on miss/stale call the API and store.
+  On app launch, refresh entries older than `metadata.cache_ttl_days` (config,
+  default e.g. 30) in the background — NOT a full DB dump (tens of GB, rejected).
+  This is "sync on launch" reinterpreted as **stale-cache refresh**, which is what
+  keeps it fast and small per the user's directive.
+
+Config additions: `[metadata] cache_ttl_days`, `musicbrainz.user_agent`,
+`discogs.token` (Discogs needs a token; MB needs a UA string).
+
+Acceptance: `tracks` search returns hits from both backends ranked by metadata
+authority; repeated identical search hits the cache (no second API call); cache TTL
+refresh unit-tested with a frozen clock.
+
+## §4 — Simpler clone (sample editor) **[DECIDED: full scope at once]**
+
+A combined **preview + editor** that *replaces* the current waveform/preview zone.
+Largest epic. New widget `gui/simpler_pane.py` swaps in where `WaveformPane` sits in
+`main_window.py`; it plays the selected sample (preview role) and edits it.
+
+Editor surface (full set, per [DECIDED]):
+
+- Waveform display (reuse `playback.decode_waveform_data` + `logic.compute_peaks`).
+- **Region** selection: draggable start/end handles; only the region is
+  played/exported.
+- **Fade** in / out: draggable fade handles over the region edges.
+- **Gain**: louder/quieter slider applied to the render.
+- **ADSR** envelope (Attack/Decay/Sustain/Release) applied over the region.
+- **Reverse**.
+
+Pure DSP core — new Qt-free `audio/editor.py`:
+`render_edit(path, region, *, reverse, gain_db, fade_in, fade_out, adsr) ->
+np.ndarray` and `write_wav(buffer, sr, dest) -> Path`. numpy + soundfile only, fully
+unit-testable (no Qt, no ffmpeg). Keeps all signal math out of the widget.
+
+**Preview playback of edits:** `AudioPlayer` is ffplay and cannot play a numpy
+buffer, so the edited region is rendered to a temp WAV and ffplay plays that.
+(Original-file playback path unchanged; edits go through render-then-play.)
+
+**Export paths** (both required):
+1. Explicit **Export → Saved**: render → write WAV into the **Saved** folder.
+2. **Drag from the Simpler waveform → DAW**: on drag-start, synchronously render the
+   current edit to a WAV in Saved, then `QDrag` its `QUrl` (reuses §2 `file_urls`).
+   So a drag both *persists* the edit to Saved and drops it into the DAW.
+
+**Saved folder** = new `paths.saved_dir` config (default e.g. `<library>/_saved`).
+It is a normal scanned root so exports auto-index into `samples` (give them
+`source='edit'`), and it appears as a pinned **`💾 Saved`** branch in the tree
+(synthetic branch like Favorites/Crates, or simply a recognized root). Worker
+auto-indexes the exported file after render.
+
+Threading: render runs on the `IndexWorker` (`request_render(params)` →
+`renderReady(path)` signal) for the explicit export; the drag-export renders
+synchronously on drag-start (samples are short — acceptable; can move to worker if
+latency bites).
+
+New/changed files: `gui/simpler_pane.py` (new), `audio/editor.py` (new),
+`gui/worker.py` (render slot/signal + auto-index of Saved), `gui/main_window.py`
+(swap preview zone for Simpler), `config.py` + `config.example.toml`
+(`paths.saved_dir`), `gui/logic.py` (Saved branch in `tree_rows`; ADSR/fade curve
+math can live here as pure helpers).
+
+Acceptance: load sample into Simpler; set region + reverse + gain + fade + ADSR;
+preview plays the edit; Export writes to Saved and it appears in the Saved branch;
+drag from the Simpler waveform drops a rendered WAV into the DAW and persists it to
+Saved. `audio/editor.py` unit-tested (reverse, gain, fade ramps, ADSR shape,
+region bounds) on synthetic buffers.
+
+## Schema delta summary (all additive, `_ensure_*` idempotent)
+
+| change | epic |
+|--------|------|
+| `sample_tags.source TEXT DEFAULT 'manual'` | §1 |
+| `crates`, `crate_samples` tables | §3 |
+| `metadata_cache` table | §6 |
+| `paths.saved_dir` config + `source='edit'` rows | §4 |
+
+No destructive migrations; existing rows unaffected.
