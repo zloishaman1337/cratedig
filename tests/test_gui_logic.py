@@ -1,6 +1,7 @@
 """Tests for cratedig.gui.logic module - pure GUI logic functions."""
 
 import math
+import os
 
 import numpy as np
 import pytest
@@ -8,7 +9,7 @@ import pytest
 from cratedig.db.models import Sample
 from cratedig.gui.logic import (
     compute_peaks, filename_parts, hit_rows, resolve_similar, tree_rows,
-    is_sample_favorite, similar_name, format_metadata,
+    is_sample_favorite, similar_name, format_metadata, file_urls,
 )
 from cratedig.sources.base import SearchHit
 from cratedig.tui.browser import FolderNode
@@ -106,33 +107,25 @@ class TestFormatMetadata:
                 found = True
         assert found
 
-    def test_duration_formatted_as_mmss(self):
-        """Duration should be formatted as 'MM:SS'."""
+    def test_duration_is_omitted(self):
+        """Duration belongs in the table, not the metadata panel."""
         sample = Sample(
             id=1, path="/a/kick.wav", filename="kick.wav",
             duration_sec=125.5  # 2 min 5.5 sec
         )
         result = format_metadata(sample, None)
-        found = False
-        for label, value in result:
-            if label == "Duration":
-                assert value == "2:05"  # 2 min 5 sec (truncated)
-                found = True
-        assert found
+        labels = [label for label, _ in result]
+        assert "Duration" not in labels
 
-    def test_duration_short(self):
-        """Short duration should still format correctly."""
+    def test_short_duration_is_omitted(self):
+        """Short duration should also stay out of metadata rows."""
         sample = Sample(
             id=1, path="/a/kick.wav", filename="kick.wav",
             duration_sec=45.0  # 45 sec
         )
         result = format_metadata(sample, None)
-        found = False
-        for label, value in result:
-            if label == "Duration":
-                assert value == "0:45"
-                found = True
-        assert found
+        labels = [label for label, _ in result]
+        assert "Duration" not in labels
 
     def test_file_size_in_kb(self):
         """File size under 1 MB should be shown in KB."""
@@ -162,48 +155,35 @@ class TestFormatMetadata:
                 found = True
         assert found
 
-    def test_bpm_formatted(self):
-        """BPM should be included and formatted."""
+    def test_bpm_is_omitted(self):
+        """BPM belongs in the table, not the metadata panel."""
         sample = Sample(
             id=1, path="/a/kick.wav", filename="kick.wav",
             bpm=120.5
         )
         result = format_metadata(sample, None)
-        found = False
-        for label, value in result:
-            if label == "BPM":
-                assert "120" in value
-                found = True
-        assert found
+        labels = [label for label, _ in result]
+        assert "BPM" not in labels
 
-    def test_key_and_scale(self):
-        """Key and scale should be combined."""
+    def test_key_and_scale_are_omitted(self):
+        """Key belongs in the table, not the metadata panel."""
         sample = Sample(
             id=1, path="/a/kick.wav", filename="kick.wav",
             musical_key="C", key_scale="minor"
         )
         result = format_metadata(sample, None)
-        found = False
-        for label, value in result:
-            if label == "Key":
-                assert "C" in value
-                assert "minor" in value
-                found = True
-        assert found
+        labels = [label for label, _ in result]
+        assert "Key" not in labels
 
-    def test_key_only_no_scale(self):
-        """Key with no scale should still appear."""
+    def test_key_only_is_omitted(self):
+        """Key without scale should also stay out of metadata rows."""
         sample = Sample(
             id=1, path="/a/kick.wav", filename="kick.wav",
             musical_key="A", key_scale=None
         )
         result = format_metadata(sample, None)
-        found = False
-        for label, value in result:
-            if label == "Key":
-                assert "A" in value
-                found = True
-        assert found
+        labels = [label for label, _ in result]
+        assert "Key" not in labels
 
     def test_loudness_lufs(self):
         """Loudness should be shown in LUFS."""
@@ -327,10 +307,7 @@ class TestFormatMetadata:
         assert "Format" in labels
         assert "Sample rate" in labels
         assert "Channels" in labels
-        assert "Duration" in labels
         assert "Size" in labels
-        assert "BPM" in labels
-        assert "Key" in labels
         assert "Loudness" in labels
         assert "Category" in labels
         assert "Class" in labels
@@ -348,6 +325,19 @@ class TestFilenameParts:
 
     def test_filename_without_extension(self):
         assert filename_parts("kick") == ("kick", "")
+
+
+class TestFileUrls:
+    """Test file_urls(samples) -> list[str] preserving selected sample paths."""
+
+    def test_empty(self):
+        assert file_urls([]) == []
+
+    def test_preserves_paths_and_order(self):
+        s1 = Sample(id=1, path="/packs/a.wav", filename="a.wav")
+        s2 = Sample(id=2, path="/packs/nested/b.wav", filename="b.wav")
+
+        assert file_urls([s1, s2]) == ["/packs/a.wav", "/packs/nested/b.wav"]
 
 
 class TestComputePeaks:
@@ -895,7 +885,7 @@ class TestTreeRows:
 
 
 class TestHitRows:
-    """Test hit_rows(hits) -> list of (title, artist, duration, backend) tuples."""
+    """Test hit_rows(hits) display tuples."""
 
     def test_empty(self):
         assert hit_rows([]) == []
@@ -905,11 +895,27 @@ class TestHitRows:
             backend="freesound", id="123", title="Kick", artist="Foo",
             duration_sec=2.5,
         )
-        assert hit_rows([hit]) == [("Kick", "Foo", "2.5", "freesound")]
+        assert hit_rows([hit]) == [("Kick", "Foo", "-", "", "2.5", "freesound")]
 
     def test_missing_duration_shows_dash(self):
         hit = SearchHit(backend="yandex", id="x", title="Track", artist="Bar")
-        assert hit_rows([hit]) == [("Track", "Bar", "-", "yandex")]
+        assert hit_rows([hit]) == [("Track", "Bar", "-", "", "-", "yandex")]
+
+    def test_metadata_overrides_source_fields(self):
+        hit = SearchHit(
+            backend="youtube",
+            id="x",
+            title="Eminem - Lose Yourself (Official Video)",
+            artist="EminemMusic",
+            extra={"metadata": {
+                "title": "Lose Yourself",
+                "artist": "Eminem",
+                "album": "8 Mile",
+                "year": 2002,
+            }},
+        )
+
+        assert hit_rows([hit]) == [("Lose Yourself", "Eminem", "2002", "8 Mile", "-", "youtube")]
 
     def test_order_preserved_for_row_index_mapping(self):
         hits = [
@@ -918,7 +924,7 @@ class TestHitRows:
         ]
         rows = hit_rows(hits)
         assert [r[0] for r in rows] == ["One", "Two"]
-        assert [r[3] for r in rows] == ["a", "b"]
+        assert [r[5] for r in rows] == ["a", "b"]
 
 
 class TestIsSampleFavorite:
@@ -964,3 +970,51 @@ class TestResolveSimilar:
         by_id = {1: s1, 2: None}  # id 2 unresolved (deleted between query and fetch)
         hits = [(2, 0.9), (1, 0.7), (99, 0.6)]
         assert resolve_similar(hits, by_id) == [s1]
+
+
+class TestSampleTable:
+    """Optional PySide6 smoke tests for table columns and drag MIME payload."""
+
+    def _app(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        pytest.importorskip("PySide6")
+        from PySide6.QtWidgets import QApplication
+
+        return QApplication.instance() or QApplication([])
+
+    def test_table_has_nine_columns_without_extension(self):
+        self._app()
+        from cratedig.gui.sample_table import SampleTable
+
+        table = SampleTable()
+
+        headers = [
+            table._table.horizontalHeaderItem(col).text()
+            for col in range(table._table.columnCount())
+        ]
+        assert table._table.columnCount() == 9
+        assert "Extension" not in headers
+
+    def test_drag_mime_data_uses_selected_sample_file_urls(self):
+        self._app()
+        from PySide6.QtCore import QItemSelectionModel
+        from cratedig.gui.sample_table import SampleTable
+
+        table = SampleTable()
+        s1 = Sample(id=1, path="/packs/a.wav", filename="a.wav")
+        s2 = Sample(id=2, path="/packs/b.wav", filename="b.wav")
+        table.set_samples([s1, s2])
+
+        selection = table._table.selectionModel()
+        selection.select(
+            table._table.model().index(0, 0),
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+        )
+        selection.select(
+            table._table.model().index(1, 0),
+            QItemSelectionModel.SelectionFlag.Select | QItemSelectionModel.SelectionFlag.Rows,
+        )
+
+        mime = table._table.mimeData([])
+
+        assert [url.toLocalFile() for url in mime.urls()] == ["/packs/a.wav", "/packs/b.wav"]

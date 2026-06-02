@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .models import Sample
+from .models import MetadataCacheRecord, Sample
 
 SCHEMA_VERSION = "1"
 
@@ -285,6 +285,62 @@ class Database:
                 (category, instrument_class, sample_id),
             )
             self.conn.commit()
+
+    # --- external metadata cache -----------------------------------------
+    def get_metadata_cache(self, provider: str, query_norm: str) -> MetadataCacheRecord | None:
+        with self.lock:
+            row = self.conn.execute(
+                "SELECT * FROM metadata_cache WHERE provider=? AND query_norm=?",
+                (provider, query_norm),
+            ).fetchone()
+        return MetadataCacheRecord.from_row(row) if row else None
+
+    def upsert_metadata_cache(self, record: MetadataCacheRecord) -> None:
+        with self.lock:
+            self.conn.execute(
+                """
+                INSERT INTO metadata_cache (
+                    provider, query_norm, ext_id, artist, title, album, year,
+                    genre, response_json, fetched_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(provider, query_norm) DO UPDATE SET
+                    ext_id=excluded.ext_id,
+                    artist=excluded.artist,
+                    title=excluded.title,
+                    album=excluded.album,
+                    year=excluded.year,
+                    genre=excluded.genre,
+                    response_json=excluded.response_json,
+                    fetched_at=excluded.fetched_at
+                """,
+                (
+                    record.provider,
+                    record.query_norm,
+                    record.ext_id,
+                    record.artist,
+                    record.title,
+                    record.album,
+                    record.year,
+                    record.genre,
+                    record.response_json,
+                    record.fetched_at or _now(),
+                ),
+            )
+            self.conn.commit()
+
+    def stale_metadata_cache(self, before_iso: str, limit: int = 50) -> list[MetadataCacheRecord]:
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT * FROM metadata_cache
+                WHERE fetched_at < ?
+                ORDER BY fetched_at
+                LIMIT ?
+                """,
+                (before_iso, limit),
+            ).fetchall()
+        return [MetadataCacheRecord.from_row(row) for row in rows]
 
     # --- favorites ------------------------------------------------------
     def add_favorite(self, kind: str, ref: str) -> None:

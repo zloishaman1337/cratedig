@@ -2,7 +2,7 @@
 
 Modes:
   - "samples" → search FreeSound (sample-oriented backend)
-  - "tracks"  → search Yandex; if no results / unavailable, fall back to YouTube
+  - "tracks"  → search Yandex and YouTube, merging any hits found
   - "single"  → use one named backend
 
 `fetch_hit` downloads a chosen SearchHit and (optionally) auto-indexes the
@@ -17,6 +17,8 @@ from typing import Callable
 
 from ..config import Config
 from ..db import Database
+from ..metadata import PROVIDERS
+from ..metadata.ranking import rank_track_hits
 from ..scan import index_file
 from .base import REGISTRY, DownloadRequest, DownloadResult, Downloader, SearchHit
 
@@ -60,7 +62,7 @@ class DownloadManager:
         """Search a mode. Returns (hits, used_backend).
 
         mode "samples": search FreeSound.
-        mode "tracks":  try Yandex; if empty/unavailable → YouTube.
+        mode "tracks":  try Yandex and YouTube, merging any hits found.
         Otherwise (mode == backend name): search just that backend.
         """
         if mode == "samples":
@@ -71,6 +73,8 @@ class DownloadManager:
             order = [mode]
 
         last_err = ""
+        all_hits: list[SearchHit] = []
+        used_names: list[str] = []
         for name in order:
             dl = self._make(name)
             if not dl or not dl.available():
@@ -81,7 +85,17 @@ class DownloadManager:
                 last_err = f"{name}: {type(e).__name__}"
                 hits = []
             if hits:
+                if mode == "tracks":
+                    all_hits.extend(hits)
+                    used_names.append(name)
+                    continue
                 return hits, name
+        if all_hits:
+            if mode == "tracks":
+                all_hits = rank_track_hits(
+                    self.db, self.cfg.metadata, PROVIDERS, query, all_hits
+                )
+            return all_hits, "+".join(used_names)
         used = last_err or (order[-1] if order else "")
         return [], used
 

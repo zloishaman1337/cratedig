@@ -189,7 +189,7 @@ class IndexWorker(QObject):
 
         try:
             hits = indexer.find_similar_aspects(self._db, sample_id, list(aspects), k=k)
-            samples_by_id = {sid: self._db.get_sample(sid) for sid, _, _ in hits}
+            samples_by_id = self._db.get_samples_by_ids([sid for sid, _, _ in hits])
             samples = resolve_similar([(sid, c) for sid, c, _ in hits], samples_by_id)
             scores = {sid: combined for sid, combined, _ in hits}
             self.similarReady.emit(seq, samples, sample_id, scores)

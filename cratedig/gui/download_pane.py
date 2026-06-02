@@ -18,7 +18,7 @@ from PySide6.QtWidgets import (
 
 from .logic import hit_rows
 
-_COLUMNS = ("Title", "Artist", "Duration", "Backend")
+_COLUMNS = ("Title", "Artist", "Year", "Album", "Duration", "Backend")
 _MODES = ("samples", "tracks", "youtube", "yandex", "freesound", "archive")
 
 

@@ -22,9 +22,8 @@ class DiscogsProvider(MetadataProvider):
     def lookup(self, sample_id: int, q: MetadataQuery) -> MetadataRecord | None:
         import discogs_client
 
-        client = discogs_client.Client(
-            "cratedig/0.1", user_token=self.config["discogs_token"]
-        )
+        ua = self.config.get("discogs_useragent", "cratedig/0.1")
+        client = discogs_client.Client(ua, user_token=self.config["discogs_token"])
         terms = " ".join(t for t in (q.artist, q.title, q.album) if t)
         results = client.search(terms, type="release")
         if not results or len(results) == 0:
@@ -36,6 +35,7 @@ class DiscogsProvider(MetadataProvider):
             ext_id=str(rel.id),
             artist=", ".join(a.name for a in getattr(rel, "artists", []) or []) or None,
             title=getattr(rel, "title", None),
+            album=getattr(rel, "title", None),
             year=getattr(rel, "year", None),
             genre=", ".join(getattr(rel, "genres", []) or []) or None,
             raw_json=json.dumps({"id": rel.id, "title": getattr(rel, "title", None)}),

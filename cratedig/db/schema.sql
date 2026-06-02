@@ -86,6 +86,21 @@ CREATE TABLE IF NOT EXISTS metadata (
     UNIQUE(sample_id, provider)
 );
 
+CREATE TABLE IF NOT EXISTS metadata_cache (
+    id            INTEGER PRIMARY KEY,
+    provider      TEXT NOT NULL,                  -- musicbrainz | discogs
+    query_norm    TEXT NOT NULL,                  -- lowercased "artist|title"
+    ext_id        TEXT,
+    artist        TEXT,
+    title         TEXT,
+    album         TEXT,
+    year          INTEGER,
+    genre         TEXT,
+    response_json TEXT NOT NULL,
+    fetched_at    TEXT NOT NULL,
+    UNIQUE(provider, query_norm)
+);
+
 CREATE TABLE IF NOT EXISTS favorites (
     id         INTEGER PRIMARY KEY,
     kind       TEXT NOT NULL,

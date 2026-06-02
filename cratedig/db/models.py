@@ -62,3 +62,23 @@ class MetadataRecord:
     year: int | None = None
     genre: str | None = None
     raw_json: str | None = None
+
+
+@dataclass
+class MetadataCacheRecord:
+    provider: str
+    query_norm: str
+    response_json: str
+    ext_id: str | None = None
+    artist: str | None = None
+    title: str | None = None
+    album: str | None = None
+    year: int | None = None
+    genre: str | None = None
+    fetched_at: str | None = None
+
+    @classmethod
+    def from_row(cls, row) -> "MetadataCacheRecord":
+        d = dict(row)
+        d.pop("id", None)
+        return cls(**{k: d.get(k) for k in cls.__dataclass_fields__})

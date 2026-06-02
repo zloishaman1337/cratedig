@@ -6,7 +6,7 @@ import numpy as np
 from cratedig import index as indexer
 from cratedig.audio.features import FEATURE_DIM
 from cratedig.db import Database
-from cratedig.db.models import Sample
+from cratedig.db.models import MetadataCacheRecord, Sample
 
 
 def _sample(path: str, **kw) -> Sample:
@@ -19,6 +19,19 @@ def test_upsert_and_get(tmp_path):
     s = db.get_sample(sid)
     assert s and s.filename == "kick.wav" and s.bpm == 120.0
     assert db.count_samples() == 1
+    db.close()
+
+
+def test_get_samples_by_ids_returns_existing_rows_keyed_by_id(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid1 = db.upsert_sample(_sample("/a/kick.wav"))
+    sid2 = db.upsert_sample(_sample("/a/snare.wav"))
+
+    samples = db.get_samples_by_ids([sid2, 999, sid1, sid2])
+
+    assert set(samples) == {sid1, sid2}
+    assert samples[sid1].filename == "kick.wav"
+    assert samples[sid2].filename == "snare.wav"
     db.close()
 
 
@@ -204,6 +217,46 @@ def test_classify_pending_updates_missing_categories(tmp_path):
     # includes "category IS NULL". It will re-set the same values (idempotent).
     assert indexer.classify_pending(db) == 1
     assert db.get_sample(sid).instrument_class == "kick"
+    db.close()
+
+
+def test_metadata_cache_roundtrip(tmp_path):
+    db = Database(tmp_path / "t.db")
+    record = MetadataCacheRecord(
+        provider="musicbrainz",
+        query_norm="eminem|lose yourself|",
+        ext_id="mbid",
+        artist="Eminem",
+        title="Lose Yourself",
+        album="8 Mile",
+        year=2002,
+        genre="Hip Hop",
+        response_json='{"id":"mbid"}',
+    )
+
+    db.upsert_metadata_cache(record)
+    cached = db.get_metadata_cache("musicbrainz", "eminem|lose yourself|")
+
+    assert cached is not None
+    assert cached.artist == "Eminem"
+    assert cached.album == "8 Mile"
+    assert cached.year == 2002
+    assert cached.fetched_at
+    db.close()
+
+
+def test_stale_metadata_cache_lists_old_entries(tmp_path):
+    db = Database(tmp_path / "t.db")
+    db.upsert_metadata_cache(MetadataCacheRecord(
+        provider="discogs",
+        query_norm="a|b|",
+        response_json="{}",
+        fetched_at="2020-01-01T00:00:00+00:00",
+    ))
+
+    stale = db.stale_metadata_cache("2021-01-01T00:00:00+00:00")
+
+    assert [row.query_norm for row in stale] == ["a|b|"]
     db.close()
 
 

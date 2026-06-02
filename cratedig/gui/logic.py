@@ -44,27 +44,12 @@ def format_metadata(sample, embedded: dict | None) -> list[tuple[str, str]]:
     ch = getattr(sample, "channels", None)
     _add("Channels", ch)
 
-    dur = getattr(sample, "duration_sec", None)
-    if dur is not None:
-        total = int(dur)
-        _add("Duration", f"{total // 60}:{total % 60:02d}")
-
     fsize = getattr(sample, "file_size", None)
     if fsize is not None:
         if fsize >= 1_048_576:
             _add("Size", f"{fsize / 1_048_576:.1f} MB")
         else:
             _add("Size", f"{fsize / 1024:.1f} KB")
-
-    bpm = getattr(sample, "bpm", None)
-    if bpm is not None:
-        _add("BPM", f"{bpm:.1f}")
-
-    key = getattr(sample, "musical_key", None)
-    scale = getattr(sample, "key_scale", None)
-    key_parts = [p for p in (key, scale) if p]
-    if key_parts:
-        _add("Key", " ".join(key_parts))
 
     loudness = getattr(sample, "loudness_lufs", None)
     if loudness is not None:
@@ -146,6 +131,11 @@ def filename_parts(filename: str) -> tuple[str, str]:
     return path.stem, path.suffix
 
 
+def file_urls(samples: list["Sample"]) -> list[str]:
+    """Return sample paths in input order for local file URL drag payloads."""
+    return [s.path for s in samples]
+
+
 def resolve_similar(
     hits: list[tuple[int, float]],
     samples_by_id: dict[int, "Sample | None"],
@@ -158,14 +148,22 @@ def resolve_similar(
     return [s for sid, _score in hits if (s := samples_by_id.get(sid)) is not None]
 
 
-def hit_rows(hits: list["SearchHit"]) -> list[tuple[str, str, str, str]]:
-    """Flatten search hits into (title, artist, duration, backend) display rows.
+def hit_rows(hits: list["SearchHit"]) -> list[tuple[str, str, str, str, str, str]]:
+    """Flatten search hits into display rows.
 
     Mirrors the TUI hit table. Duration shows one decimal second, or "-" when
     unknown. Order is preserved so a row index maps back to its hit.
     """
-    rows: list[tuple[str, str, str, str]] = []
+    rows: list[tuple[str, str, str, str, str, str]] = []
     for h in hits:
+        meta = h.extra.get("metadata", {}) if h.extra else {}
         dur = f"{h.duration_sec:.1f}" if h.duration_sec else "-"
-        rows.append((h.title or "", h.artist or "", dur, h.backend or ""))
+        rows.append((
+            meta.get("title") or h.title or "",
+            meta.get("artist") or h.artist or "",
+            str(meta.get("year") or "-"),
+            meta.get("album") or "",
+            dur,
+            h.backend or "",
+        ))
     return rows

@@ -2,9 +2,10 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QMimeData, Qt, QUrl, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QMenu,
     QStyledItemDelegate,
     QTableWidget,
@@ -16,9 +17,9 @@ from PySide6.QtWidgets import (
 )
 
 from ..db.models import Sample
-from .logic import filename_parts, similar_name
+from .logic import file_urls, filename_parts, similar_name
 
-_COLUMNS = ("Filename", "Extension", "Class", "Category", "BPM", "Key", "SR", "Tags", "Duration", "Similarity")
+_COLUMNS = ("Filename", "Class", "Category", "BPM", "Key", "SR", "Tags", "Duration", "Similarity")
 
 _SIM_COL = _COLUMNS.index("Similarity")
 _FNAME_COL = _COLUMNS.index("Filename")
@@ -68,6 +69,18 @@ class SimilarityBarDelegate(QStyledItemDelegate):
         painter.restore()
 
 
+class _SampleTableWidget(QTableWidget):
+    def __init__(self, selected_samples, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._selected_samples = selected_samples
+
+    def mimeData(self, _items) -> QMimeData:
+        mime = QMimeData()
+        urls = [QUrl.fromLocalFile(path) for path in file_urls(self._selected_samples())]
+        mime.setUrls(urls)
+        return mime
+
+
 class SampleTable(QWidget):
     """Displays a list of Sample rows; emits selection events."""
 
@@ -82,12 +95,14 @@ class SampleTable(QWidget):
         super().__init__(parent)
         self._samples: list[Sample] = []
         self._tags_by_id: dict[int, list[str]] = {}
-        self._table = QTableWidget()
+        self._table = _SampleTableWidget(self._selected_samples_for_drag)
         self._table.setColumnCount(len(_COLUMNS))
         self._table.setHorizontalHeaderLabels(list(_COLUMNS))
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
-        self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self._table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
+        self._table.setDragEnabled(True)
+        self._table.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
         self._table.horizontalHeader().setStretchLastSection(False)
         self._table.horizontalHeader().setSectionResizeMode(_FNAME_COL, QHeaderView.ResizeMode.Stretch)
         self._table.verticalHeader().setVisible(False)
@@ -118,11 +133,10 @@ class SampleTable(QWidget):
         for row, s in enumerate(self._samples):
             bpm = f"{s.bpm:.1f}" if s.bpm is not None else ""
             tags_str = ", ".join(self._tags_by_id.get(s.id, []))
-            display_name, extension = filename_parts(s.filename)
+            display_name = filename_parts(s.filename)[0]
             fname = similar_name(s.path) if show_path else display_name
             values = (
                 fname,
-                extension,
                 s.instrument_class or "",
                 s.category or "",
                 bpm,
@@ -155,6 +169,10 @@ class SampleTable(QWidget):
     def _on_cell_changed(self, current_row: int, _cc: int, _pr: int, _pc: int) -> None:
         if 0 <= current_row < len(self._samples):
             self.sample_selected.emit(self._samples[current_row])
+
+    def _selected_samples_for_drag(self) -> list[Sample]:
+        rows = sorted({idx.row() for idx in self._table.selectionModel().selectedRows()})
+        return [self._samples[row] for row in rows if 0 <= row < len(self._samples)]
 
     def _on_context_menu(self, pos) -> None:
         row = self._table.rowAt(pos.y())

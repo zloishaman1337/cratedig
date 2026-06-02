@@ -30,7 +30,7 @@ from .browser import FolderNode, build_folder_tree
 from .status import OPERATION_ORDER, format_operations, progress_label
 
 COLUMNS = ("id", "filename", "wave", "cat", "bpm", "key", "dur(s)", "src")
-DL_COLUMNS = ("#", "title", "artist", "dur(s)", "src")
+DL_COLUMNS = ("#", "title", "artist", "year", "album", "dur(s)", "src")
 DUP_COLUMNS = ("hash", "id", "filename", "cat", "dur(s)", "src", "path")
 WAVE_PLACEHOLDER = " " * 28
 
@@ -90,8 +90,13 @@ def _tree_rows(samples: list[Sample], roots: tuple[Path, ...]) -> list[tuple[str
 
 
 def _hit_row(i: int, h: SearchHit) -> tuple:
+    meta = h.extra.get("metadata", {}) if h.extra else {}
     dur = f"{h.duration_sec:.1f}" if h.duration_sec else "-"
-    return (str(i), h.title[:50], (h.artist or "")[:24], dur, h.backend)
+    title = meta.get("title") or h.title
+    artist = meta.get("artist") or h.artist or ""
+    year = str(meta.get("year") or "-")
+    album = meta.get("album") or ""
+    return (str(i), title[:50], artist[:24], year, album[:28], dur, h.backend)
 
 
 def _dup_row(s: Sample) -> tuple:
