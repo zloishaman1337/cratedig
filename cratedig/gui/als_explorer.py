@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import os
 
-from PySide6.QtCore import Qt
+from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
     QFileDialog,
@@ -243,11 +243,15 @@ class ExpandableSamples(QWidget):
 # ── Main window ────────────────────────────────────────────────────────────────
 
 class AlsExplorerPanel(QWidget):
+    matchRequested = Signal(object)  # emitted with list[str] of ALS sample names
+
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
 
         self._data: dict | None = None
+        self._match_seq = 0
+        self._match_tab: QWidget | None = None
 
         self._build_ui()
 
@@ -289,6 +293,12 @@ class AlsExplorerPanel(QWidget):
         self._btn_open.setMinimumWidth(160)
         self._btn_open.clicked.connect(self._open_file)
         header_layout.addWidget(self._btn_open)
+
+        self._btn_match = QPushButton("Match library")
+        self._btn_match.setMinimumWidth(120)
+        self._btn_match.setEnabled(False)
+        self._btn_match.clicked.connect(self._on_match_clicked)
+        header_layout.addWidget(self._btn_match)
 
         main_layout.addWidget(header)
 
@@ -410,7 +420,69 @@ class AlsExplorerPanel(QWidget):
         self._lbl_file.setText(os.path.basename(path))
         self._lbl_file.setStyleSheet(f"color: {C_VALUE}; background: transparent;")
         self._lbl_version.setText(data["ableton_version"])
+        self._btn_match.setEnabled(True)
         self._render(data)
+
+    def _on_match_clicked(self) -> None:
+        if self._data is None:
+            return
+        samples = self._data.get("samples", {})
+        names = list(samples.get("found", [])) + list(samples.get("missing", []))
+        self._match_seq += 1
+        self.matchRequested.emit(names)
+
+    def set_match_result(self, result: dict) -> None:
+        """Populate the Library Match tab with found/candidates/unresolved entries."""
+        if self._match_tab is not None:
+            idx = self._tabs.indexOf(self._match_tab)
+            if idx >= 0:
+                self._tabs.removeTab(idx)
+        self._match_tab = self._build_match_tab(result)
+        self._tabs.addTab(self._match_tab, "Library Match")
+
+    def _build_match_tab(self, result: dict) -> QWidget:
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(8, 4, 8, 4)
+        layout.setSpacing(2)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        inner.setStyleSheet("background: transparent;")
+        inner_layout = QVBoxLayout(inner)
+        inner_layout.setContentsMargins(0, 0, 0, 0)
+        inner_layout.setSpacing(2)
+
+        found = result.get("found", [])
+        candidates = result.get("candidates", [])
+        unresolved = result.get("unresolved", [])
+
+        if found:
+            inner_layout.addWidget(_colored_label(f"Found ({len(found)})", C_OK, bold=True))
+            for name, _entry in found:
+                inner_layout.addWidget(_colored_label(f"  ✓  {name}", C_OK))
+
+        if candidates:
+            inner_layout.addWidget(_colored_label(f"Candidates ({len(candidates)})", C_VST, bold=True))
+            for name, _entries in candidates:
+                inner_layout.addWidget(_colored_label(f"  ?  {name}", C_VST))
+
+        if unresolved:
+            inner_layout.addWidget(_colored_label(f"Unresolved ({len(unresolved)})", C_ERR, bold=True))
+            for name in unresolved:
+                inner_layout.addWidget(_colored_label(f"  ✗  {name}", C_ERR))
+
+        if not found and not candidates and not unresolved:
+            inner_layout.addWidget(_colored_label("No samples to match", C_MUTED))
+
+        inner_layout.addStretch()
+        scroll.setWidget(inner)
+        layout.addWidget(scroll, stretch=1)
+        return tab
 
     # ── Render ─────────────────────────────────────────────────────────────────
 
@@ -429,6 +501,7 @@ class AlsExplorerPanel(QWidget):
 
         # Rebuild tabs
         self._tabs.clear()
+        self._match_tab = None
         self._tabs.addTab(self._build_tab_widget(data, "instruments"), T("tab_instruments"))
         self._tabs.addTab(self._build_tab_widget(data, "plugins"),     T("tab_plugins"))
         self._tabs.addTab(self._build_tab_widget(data, "tracks"),      T("tab_tracks"))

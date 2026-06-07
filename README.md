@@ -1,14 +1,15 @@
 # cratedig
 
-A local TUI + web-panel fork of **Sononym**: index your sample library, search by
+A local desktop + TUI fork of **Sononym**: index your sample library, search by
 **BPM / key / mood / tags**, find acoustically **similar** samples, **download**
-new audio (YouTube, Yandex Music, FreeSound, Internet Archive), and dive into
-samples with a browser waveform/metadata panel. SQLite-backed. For personal,
-local use.
+new audio (YouTube, Yandex Music, FreeSound, Internet Archive), organize crates,
+inspect Ableton `.als` projects, and edit/export sample regions in a Simpler-like
+panel. SQLite-backed. For personal, local use.
 
-> Status: **v0.1 skeleton + working local-scan slice.** Scan → analyze → browse →
-> search → similarity works end-to-end. Download backends + metadata are wired but
-> need their deps/tokens.
+> Status: standalone desktop GUI is now the primary surface. Scan → analyze →
+> browse → search → similarity → crates → Simpler export works in code/tests.
+> Web UI has been removed; finish the pre-redesign stabilization roadmap in
+> [ARCHITECTURE.md](ARCHITECTURE.md) before visual redesign.
 
 ## Install
 
@@ -41,7 +42,6 @@ paths; keep `config.example.toml` as the shareable template.
 ```powershell
 cratedig                 # launch the TUI
 cratedig gui             # launch the desktop GUI (needs [gui] extra)
-cratedig web             # launch the local web sample-diving panel
 cratedig scan            # index library_dirs (headless)
 cratedig classify        # fill missing categories from filenames/paths
 cratedig analyze         # compute BPM/key/feature vectors (needs librosa)
@@ -62,7 +62,6 @@ cratedig download "<url>" --url --source youtube
 | `b` | toggle favorite on the selected folder (in tree) or sample (in contents) |
 | arrows / click | preview the highlighted sample or download hit (uses `ffplay`) |
 | `p` | play / stop the selected sample, or preview the selected download hit |
-| `w` | open/sync the selected sample in the local web panel |
 | `x` | stop playback |
 | `r` | refresh / clear search |
 | `d` | toggle Download mode |
@@ -75,22 +74,24 @@ Download-mode preview needs a direct preview URL from the backend. FreeSound
 results include one; Yandex/YouTube hits usually do not, so they show a status
 message and can still be downloaded with `Enter`.
 
-### Desktop GUI (early skeleton)
+### Desktop GUI
 
 ```powershell
 pip install -e ".[gui]"   # installs PySide6
 cratedig gui              # or: python -m cratedig gui
 ```
 
-The desktop GUI is an early skeleton. It shows a **folder tree** on the left, a
-**sample table** in the centre, and a **waveform + play/stop panel** on the right
-(QSplitter layout). Playback reuses the same `ffplay`-backed `AudioPlayer` as the
-TUI. PySide6 is an optional dependency — core TUI and web runs without it.
+The desktop GUI is the main app surface. It includes a folder tree, sample table,
+favorites, crates, similarity search, metadata panel, download pane, embedded
+Ableton `.als` explorer, and a Simpler-like editor/preview pane with region,
+fade, ADSR, reverse, loop preview, Saved exports, and drag export. Playback reuses
+the same `ffplay`-backed `AudioPlayer` as the TUI. PySide6 is an optional
+dependency; core CLI/TUI commands still run without it.
 
-Features available in this stage: browse library tree, view sample table per
-folder, decode and display waveform peaks on demand, play/stop audio. File
-management, duplicates, tagging, favorites mutation, download, and similarity UI
-are not yet implemented in the GUI.
+Before redesign, the locked stabilization roadmap is: clean legacy files/docs,
+fix drag-to-DAW, improve download/metadata feedback, add Simpler transient tools,
+build a duplicates resolver, match missing ALS samples against the library, add
+A/B audition controls, expand auto-tags, and add a library health dashboard.
 
 ### API tokens
 
@@ -105,21 +106,6 @@ Scan, analyze, classify, and download operations show live progress/status in a
 multi-line TUI operation panel. Scan and analyze are intentionally mutually exclusive.
 After analysis, the TUI library table shows a compact waveform thumbnail in each
 analyzed file row.
-
-### Web panel
-
-```powershell
-cratedig web
-```
-
-The web panel opens at `http://127.0.0.1:8765` by default. It shows a collapsible
-folder tree with a **Favorites** and **Recent** sidebar, breadcrumbs, a per-folder
-content list, a library-wide filter for flat cross-library matches, Canvas stereo
-waveform, browser audio controls, file metadata, tags, and analysis fields.
-Expanded folders, current folder, and selected sample are persisted in `localStorage`.
-In the TUI, press `w` on a selected sample to open the same panel directly at
-`/?sample=<id>`. Favorites and recently-opened folders are shared between the web
-panel and the TUI via the SQLite database.
 
 ## Clone on another machine
 
@@ -143,7 +129,7 @@ Set `library_dirs`, `download_dir`, and tokens in the new machine's local
 cratedig scan
 cratedig analyze
 cratedig
-cratedig web
+cratedig gui
 ```
 
 Recommended Windows tools:
@@ -161,7 +147,7 @@ otherwise.
 ## Layout
 
 See [ARCHITECTURE.md](ARCHITECTURE.md). Source under `cratedig/`:
-`db/` · `scan/` · `audio/` · `search/` · `sources/` · `metadata/` · `tui/` · `web/` · `gui/`.
+`db/` · `scan/` · `audio/` · `search/` · `sources/` · `metadata/` · `tui/` · `gui/` · `als/`.
 
 ## Tests
 

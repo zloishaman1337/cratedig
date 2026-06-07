@@ -1,4 +1,5 @@
 import sqlite3
+import sys
 from types import SimpleNamespace
 
 import numpy as np
@@ -183,6 +184,109 @@ def test_tags(tmp_path):
     db.add_tag(sid, "loop")
     db.add_tag(sid, "drums")  # dedup
     assert db.tags_for(sid) == ["drums", "loop"]
+    db.close()
+
+
+def test_migration_adds_source_to_existing_sample_tags(tmp_path):
+    path = tmp_path / "old_tags.db"
+    conn = sqlite3.connect(path)
+    conn.executescript(
+        """
+        CREATE TABLE meta (key TEXT PRIMARY KEY, value TEXT NOT NULL);
+        CREATE TABLE samples (
+            id INTEGER PRIMARY KEY,
+            path TEXT NOT NULL UNIQUE,
+            filename TEXT NOT NULL,
+            source TEXT NOT NULL DEFAULT 'local',
+            file_hash TEXT,
+            format TEXT,
+            file_size INTEGER,
+            duration_sec REAL,
+            samplerate INTEGER,
+            channels INTEGER,
+            bpm REAL,
+            musical_key TEXT,
+            key_scale TEXT,
+            loudness_lufs REAL,
+            category TEXT,
+            instrument_class TEXT,
+            mood TEXT,
+            waveform_preview TEXT,
+            feature_vector BLOB,
+            feature_dim INTEGER,
+            analyzed_at TEXT,
+            created_at TEXT NOT NULL,
+            indexed_at TEXT NOT NULL
+        );
+        CREATE TABLE tags (
+            id INTEGER PRIMARY KEY,
+            name TEXT NOT NULL UNIQUE
+        );
+        CREATE TABLE sample_tags (
+            sample_id INTEGER NOT NULL REFERENCES samples(id) ON DELETE CASCADE,
+            tag_id INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+            PRIMARY KEY (sample_id, tag_id)
+        );
+        """
+    )
+    conn.close()
+
+    db = Database(path)
+    columns = {row["name"] for row in db.conn.execute("PRAGMA table_info(sample_tags)").fetchall()}
+
+    assert "source" in columns
+    db.close()
+
+
+def test_auto_tags_do_not_replace_manual_tags(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/t.wav"))
+    db.add_tag(sid, "manual")
+
+    db.set_auto_tags_for(sid, ["bright", "short"])
+
+    assert db.tags_for(sid) == ["bright", "manual", "short"]
+
+    db.set_auto_tags_for(sid, ["dark"])
+
+    assert db.tags_for(sid) == ["dark", "manual"]
+    db.close()
+
+
+def test_set_tags_for_replaces_only_manual_tags(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/t.wav"))
+    db.add_tag(sid, "manual")
+    db.set_auto_tags_for(sid, ["bright"])
+
+    db.set_tags_for(sid, ["loop"])
+
+    assert db.tags_for(sid) == ["bright", "loop"]
+    db.close()
+
+
+def test_tag_pending_writes_auto_tags_without_manual_overwrite(monkeypatch, tmp_path):
+    audio = tmp_path / "bright.wav"
+    audio.write_bytes(b"fake")
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(
+        _sample(str(audio), analyzed_at="2026-06-02T00:00:00+00:00")
+    )
+    db.add_tag(sid, "manual")
+
+    sr = 22050
+    t = np.linspace(0.0, 0.5, int(sr * 0.5), endpoint=False, dtype=np.float32)
+    y = np.sin(2 * np.pi * 8000.0 * t).astype(np.float32)
+
+    monkeypatch.setitem(
+        sys.modules,
+        "librosa",
+        SimpleNamespace(load=lambda path, sr, mono: (y, sr)),
+    )
+
+    assert indexer.tag_pending(db, SimpleNamespace(audio=SimpleNamespace(analysis_sr=sr))) == 1
+    assert "manual" in db.tags_for(sid)
+    assert "bright" in db.tags_for(sid)
     db.close()
 
 
@@ -701,6 +805,72 @@ def test_delete_sample_does_not_affect_other_samples(tmp_path):
     db.close()
 
 
+# --- Crates ---
+
+
+def test_create_crate_and_list_sorted(tmp_path):
+    db = Database(tmp_path / "t.db")
+
+    drums = db.create_crate("Drums")
+    bass = db.create_crate("Bass")
+
+    crates = db.list_crates()
+
+    assert [c.name for c in crates] == ["Bass", "Drums"]
+    assert {c.id for c in crates} == {drums, bass}
+    db.close()
+
+
+def test_create_crate_is_idempotent_by_name(tmp_path):
+    db = Database(tmp_path / "t.db")
+
+    first = db.create_crate("Ideas")
+    second = db.create_crate("Ideas")
+
+    assert first == second
+    assert len(db.list_crates()) == 1
+    db.close()
+
+
+def test_add_to_crate_lists_samples_in_insert_order(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid1 = db.upsert_sample(_sample("/a/kick.wav"))
+    sid2 = db.upsert_sample(_sample("/a/snare.wav"))
+    crate_id = db.create_crate("Breaks")
+
+    db.add_to_crate(crate_id, sid2)
+    db.add_to_crate(crate_id, sid1)
+    db.add_to_crate(crate_id, sid2)
+
+    assert [s.id for s in db.crate_samples(crate_id)] == [sid2, sid1]
+    db.close()
+
+
+def test_remove_from_crate_only_removes_membership(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/kick.wav"))
+    crate_id = db.create_crate("Keepers")
+    db.add_to_crate(crate_id, sid)
+
+    db.remove_from_crate(crate_id, sid)
+
+    assert db.crate_samples(crate_id) == []
+    assert db.get_sample(sid) is not None
+    db.close()
+
+
+def test_delete_sample_removes_crate_membership(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid = db.upsert_sample(_sample("/a/kick.wav"))
+    crate_id = db.create_crate("Keepers")
+    db.add_to_crate(crate_id, sid)
+
+    db.delete_sample(sid)
+
+    assert db.crate_samples(crate_id) == []
+    db.close()
+
+
 # --- Update Sample Location (new) ---
 
 
@@ -736,4 +906,93 @@ def test_update_sample_location_keeps_id_unchanged(tmp_path):
 
     sample = db.get_sample(sid)
     assert sample.id == sid
+    db.close()
+
+
+# --- BUG C: classify_pending churn and COALESCE tests (failing) ---
+
+
+def test_classify_pending_churn_reselects_unrecognizable_every_run(tmp_path):
+    """Bug C.1: classify_pending re-processes NULL-class rows every run (no attempt marker).
+
+    Current behavior: a sample with an unrecognizable filename (e.g., 'xyzzy_random_1234.wav')
+    has category=NULL and instrument_class=NULL after the first run. On the second run,
+    the WHERE clause includes "instrument_class IS NULL", so the row is re-selected and
+    updated again (idempotent, but wasteful churn).
+
+    After the fix: a `classify_attempted` column (INTEGER DEFAULT 0 on samples table) is set
+    to 1 after each attempt. The WHERE clause excludes attempted rows, so the second run
+    returns 0 (no rows to update).
+
+    This test should FAIL (red) with the current code because the second call returns 1+.
+    """
+    db = Database(tmp_path / "t.db")
+
+    # Insert a sample with a completely unrecognizable filename
+    unrecognizable_path = "/packs/xyzzy_random_1234.wav"
+    sid = db.upsert_sample(_sample(unrecognizable_path))
+
+    # Verify it starts unclassified
+    sample = db.get_sample(sid)
+    assert sample.category is None
+    assert sample.instrument_class is None
+
+    # First run: attempt to classify
+    count1 = indexer.classify_pending(db)
+    assert count1 == 1, "First run should process 1 row"
+
+    # Verify after first run: still None (unrecognizable)
+    sample = db.get_sample(sid)
+    assert sample.category is None
+    assert sample.instrument_class is None
+
+    # Second run: THIS SHOULD RETURN 0 (row marked attempted, not re-selected)
+    # With the current bug, this returns 1 or more (row re-selected and re-updated).
+    count2 = indexer.classify_pending(db)
+    assert count2 == 0, \
+        f"FAIL: second run should return 0 (row marked attempted); got {count2}"
+
+    db.close()
+
+
+def test_classify_pending_coalesce_preserves_existing_class(tmp_path):
+    """Bug C.2: UPDATE statement lacks COALESCE, so a good existing class gets nulled.
+
+    Current behavior: if a sample has an unrecognizable filename but instrument_class
+    is already set to a good value (e.g., 'kick'), the UPDATE statement overwrites it
+    with NULL (because classify_instrument returns None for the bad filename).
+
+    After the fix: the UPDATE uses COALESCE(..., column) so that a previously-set good
+    value is never nulled by a None classification attempt.
+
+    This test should FAIL (red) with the current code because the class gets nulled.
+    """
+    db = Database(tmp_path / "t.db")
+
+    # Insert a sample with an unrecognizable filename
+    unrecognizable_path = "/packs/xyzzy_random_5678.wav"
+    sid = db.upsert_sample(_sample(unrecognizable_path))
+
+    # Manually set a good instrument_class value via SQL
+    with db.lock:
+        db.conn.execute(
+            "UPDATE samples SET instrument_class=? WHERE id=?",
+            ("kick", sid),
+        )
+        db.conn.commit()
+
+    # Verify it's set
+    sample = db.get_sample(sid)
+    assert sample.instrument_class == "kick", "Initial class should be 'kick'"
+
+    # Run classify_pending: it will try to classify the unrecognizable filename,
+    # get None, and (with the bug) overwrite the good 'kick' value with NULL.
+    indexer.classify_pending(db)
+
+    # After the fix, instrument_class should REMAIN 'kick' (COALESCE preserves it)
+    # With the bug, it becomes NULL.
+    sample = db.get_sample(sid)
+    assert sample.instrument_class == "kick", \
+        f"FAIL: instrument_class should be preserved as 'kick'; got {sample.instrument_class}"
+
     db.close()

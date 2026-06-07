@@ -109,6 +109,24 @@ def scan_directory(
         spath = str(fp.resolve())
         seen_paths.add(spath)
         if db.path_exists(spath):
+            if source == "edit":
+                meta = probe_file(fp)
+                sample = Sample(
+                    id=None,
+                    path=spath,
+                    filename=fp.name,
+                    source=source,
+                    file_hash=_sha1(fp),
+                    format=meta["format"],
+                    file_size=meta["file_size"],
+                    duration_sec=meta["duration_sec"],
+                    samplerate=meta["samplerate"],
+                    channels=meta["channels"],
+                    category=classify_category(fp),
+                    instrument_class=classify_instrument(fp),
+                    created_at=now,
+                )
+                db.upsert_sample(sample)
             continue
         meta = probe_file(fp)
         sample = Sample(

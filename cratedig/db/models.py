@@ -25,6 +25,7 @@ class Sample:
     instrument_class: str | None = None
     mood: str | None = None
     waveform_preview: str | None = None
+    classify_attempted: int = 0
     feature_dim: int | None = None
     analyzed_at: str | None = None
     created_at: str | None = None
@@ -49,6 +50,18 @@ class DownloadJob:
     error: str | None = None
     requested_at: str | None = None
     completed_at: str | None = None
+
+
+@dataclass
+class Crate:
+    id: int
+    name: str
+    created_at: str
+
+    @classmethod
+    def from_row(cls, row) -> "Crate":
+        d = dict(row)
+        return cls(id=int(d["id"]), name=d["name"], created_at=d["created_at"])
 
 
 @dataclass

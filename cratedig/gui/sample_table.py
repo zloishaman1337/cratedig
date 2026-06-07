@@ -90,11 +90,14 @@ class SampleTable(QWidget):
     move_requested = Signal(object)
     delete_requested = Signal(object)
     reveal_requested = Signal(object)
+    add_to_crate_requested = Signal(object, int)
+    create_crate_requested = Signal(object, str)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._samples: list[Sample] = []
         self._tags_by_id: dict[int, list[str]] = {}
+        self._crates: list = []
         self._table = _SampleTableWidget(self._selected_samples_for_drag)
         self._table.setColumnCount(len(_COLUMNS))
         self._table.setHorizontalHeaderLabels(list(_COLUMNS))
@@ -117,6 +120,9 @@ class SampleTable(QWidget):
         layout.addWidget(self._table)
 
         self._table.currentCellChanged.connect(self._on_cell_changed)
+
+    def set_crates(self, crates) -> None:
+        self._crates = list(crates)
 
     def set_samples(
         self,
@@ -182,6 +188,16 @@ class SampleTable(QWidget):
 
         menu = QMenu(self)
         menu.addAction("Find similar").triggered.connect(lambda: self.similar_requested.emit(sample))
+        crate_menu = menu.addMenu("Add to crate")
+        if self._crates:
+            for crate in self._crates:
+                crate_menu.addAction(crate.name).triggered.connect(
+                    lambda _checked=False, c=crate: self.add_to_crate_requested.emit(sample, c.id)
+                )
+            crate_menu.addSeparator()
+        crate_menu.addAction("New crate…").triggered.connect(
+            lambda: self.create_crate_requested.emit(sample, "")
+        )
         menu.addSeparator()
         menu.addAction("Rename…").triggered.connect(lambda: self.rename_requested.emit(sample))
         menu.addAction("Move…").triggered.connect(lambda: self.move_requested.emit(sample))

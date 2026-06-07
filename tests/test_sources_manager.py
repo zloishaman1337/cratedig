@@ -27,6 +27,7 @@ def _manager(tmp_path, sources: dict, *, db=None, metadata=None) -> DownloadMana
             db=tmp_path / "cratedig.db",
             download_dir=tmp_path / "downloads",
             library_dirs=(),
+            saved_dir=tmp_path / "_saved",
         ),
         audio=AudioCfg(),
         sources=sources,

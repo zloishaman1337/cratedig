@@ -2,8 +2,9 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QMimeData, Qt, QUrl, Signal
 from PySide6.QtWidgets import (
+    QAbstractItemView,
     QHBoxLayout,
     QPushButton,
     QTreeWidget,
@@ -17,6 +18,33 @@ _KEY_ROLE = Qt.ItemDataRole.UserRole
 _FAV_ROLE = Qt.ItemDataRole.UserRole + 1
 
 
+class _TreeWidget(QTreeWidget):
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._crate_paths_by_id: dict[int, list[str]] = {}
+
+    def set_crate_paths(self, crate_paths_by_id: dict[int, list[str]]) -> None:
+        self._crate_paths_by_id = {
+            int(crate_id): list(paths) for crate_id, paths in crate_paths_by_id.items()
+        }
+
+    def mimeData(self, items: list[QTreeWidgetItem]) -> QMimeData:
+        mime = QMimeData()
+        urls = []
+        for item in items:
+            key = item.data(0, _KEY_ROLE)
+            if not isinstance(key, str) or not key.startswith("crate:"):
+                continue
+            try:
+                crate_id = int(key[6:])
+            except ValueError:
+                continue
+            urls.extend(QUrl.fromLocalFile(path) for path in self._crate_paths_by_id.get(crate_id, []))
+        if urls:
+            mime.setUrls(urls)
+        return mime
+
+
 class TreePane(QWidget):
     """Renders a folder tree from tree_rows() output and emits selection events."""
 
@@ -26,9 +54,11 @@ class TreePane(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
-        self._tree = QTreeWidget()
+        self._tree = _TreeWidget()
         self._tree.setHeaderHidden(True)
         self._tree.setColumnCount(1)
+        self._tree.setDragEnabled(True)
+        self._tree.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
 
         scan_btn = QPushButton("Scan")
         analyze_btn = QPushButton("Analyze")
@@ -71,6 +101,9 @@ class TreePane(QWidget):
 
         self._tree.expandAll()
         self._tree.blockSignals(False)
+
+    def set_crate_paths(self, crate_paths_by_id: dict[int, list[str]]) -> None:
+        self._tree.set_crate_paths(crate_paths_by_id)
 
     def _on_item_changed(self, current: QTreeWidgetItem | None, _previous: QTreeWidgetItem | None) -> None:
         if current is None:

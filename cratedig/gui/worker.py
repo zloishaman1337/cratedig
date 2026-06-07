@@ -3,21 +3,28 @@
 from __future__ import annotations
 
 from pathlib import Path
-import numpy as np
 from PySide6.QtCore import QObject, Signal, Slot
 
 from .. import files
 from ..config import Config
 from ..db.database import Database
 from ..tui.browser import build_folder_tree
-from .logic import resolve_similar
+from .logic import match_als_samples, resolve_similar
+
+
+def _is_saved_sample_path(path: str, saved_dir: Path) -> bool:
+    try:
+        Path(path).resolve().relative_to(saved_dir.resolve())
+    except (OSError, ValueError):
+        return False
+    return True
 
 
 class IndexWorker(QObject):
     """Runs all blocking operations on a QThread; results are emitted as signals."""
 
     # outbound signals
-    treeReady = Signal(object, object, object, object, object)  # (nodes_dict, favorites_list[Sample], samples, tags_by_id, all_tags)
+    treeReady = Signal(object, object, object, object, object, object, object)  # (nodes, favorites, crates, crate_samples_by_id, samples, tags_by_id, all_tags)
     progress = Signal(str, int, int)            # (phase, done, total)
     peaksReady = Signal(int, object)            # (seq, mono_ndarray)
     searchReady = Signal(int, object, str)      # (seq, hits_list[SearchHit], used_backend)
@@ -26,6 +33,11 @@ class IndexWorker(QObject):
     downloadDone = Signal(bool, str)            # (ok, message)
     failed = Signal(str, str)                   # (context, message)
     metadataReady = Signal(int, object)         # (seq, embedded_dict_or_None)
+    renderReady = Signal(int, str)              # (seq, exported_wav_path)
+    previewReady = Signal(int, str, float)      # (seq, staged_wav_path, duration_sec)
+    stageReady = Signal(int, str)               # (seq, staged_wav_path) — drag pre-render
+    healthReady = Signal(object)                # (HealthReport)
+    alsMatchReady = Signal(int, object)         # (seq, match_result_dict)
 
     def __init__(self, db: Database, cfg: Config, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -48,8 +60,10 @@ class IndexWorker(QObject):
             with self._db.lock:
                 samples = self._db.all_samples()
                 fav_rows = self._db.list_favorites("sample")
+                crates = self._db.list_crates()
 
-            nodes = build_folder_tree(samples, self._cfg.paths.library_dirs)
+            library_samples = [s for s in samples if getattr(s, "source", None) != "edit"]
+            nodes = build_folder_tree(library_samples, self._cfg.paths.library_dirs)
 
             # Resolve favorite dicts (kind='sample', ref=str(sample_id)) to Sample objects.
             # We call get_sample for each, which takes db.lock internally.
@@ -65,8 +79,9 @@ class IndexWorker(QObject):
 
             tags_by_id = {s.id: self._db.tags_for(s.id) for s in samples if s.id is not None}
             all_tags = self._db.all_tags()
+            crate_samples_by_id = {crate.id: self._db.crate_samples(crate.id) for crate in crates}
 
-            self.treeReady.emit(nodes, favorites, samples, tags_by_id, all_tags)
+            self.treeReady.emit(nodes, favorites, crates, crate_samples_by_id, samples, tags_by_id, all_tags)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("reload", str(exc))
 
@@ -88,13 +103,37 @@ class IndexWorker(QObject):
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("set_tags", str(exc))
 
+    @Slot(int, int)
+    def request_add_to_crate(self, sample_id: int, crate_id: int) -> None:
+        try:
+            self._db.add_to_crate(crate_id, sample_id)
+            self.request_reload()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("add_to_crate", str(exc))
+
+    @Slot(int, str)
+    def request_create_crate_with_sample(self, sample_id: int, name: str) -> None:
+        try:
+            crate_id = self._db.create_crate(name)
+            self._db.add_to_crate(crate_id, sample_id)
+            self.request_reload()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("create_crate", str(exc))
+
     @Slot(int)
     def request_delete(self, sample_id: int) -> None:
         """Trash the sample file and remove it from the DB, then reload."""
         try:
             sample = self._db.get_sample(sample_id)
             if sample is not None:
-                files.trash_file(sample.path)
+                is_saved = (
+                    getattr(sample, "source", None) == "edit"
+                    or _is_saved_sample_path(sample.path, self._cfg.paths.saved_dir)
+                )
+                if is_saved:
+                    Path(sample.path).unlink(missing_ok=True)
+                else:
+                    files.trash_file(sample.path)
             self._db.delete_sample(sample_id)
             self.request_reload()
         except RuntimeError as exc:
@@ -149,6 +188,11 @@ class IndexWorker(QObject):
                 self.progress.emit("analyze", done, total)
 
             indexer.analyze_pending(self._db, self._cfg, analyze_progress)
+            indexer.tag_pending(
+                self._db,
+                self._cfg,
+                lambda done, total: self.progress.emit("tag", done, total),
+            )
             self.progress.emit("analyze", 0, 0)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("scan_analyze", str(exc))
@@ -159,26 +203,11 @@ class IndexWorker(QObject):
 
     @Slot(int, str, int)
     def request_peaks(self, seq: int, path: str, width: int) -> None:
-        """Decode waveform for path, reduce to mono, compute peaks, emit result."""
-        from ..audio.playback import decode_waveform_data
+        """Decode waveform for path to mono samples used by the GUI canvas."""
+        from ..audio.playback import decode_waveform_mono_samples
 
         try:
-            waveform_data = decode_waveform_data(path, bins=max(width * 4, 4096), channels=2)
-            # Average channels to produce mono 1-D float32 array
-            peaks_arr = waveform_data.peaks  # channels x bins x 2
-            if peaks_arr.ndim != 3 or peaks_arr.shape[1] == 0:
-                self.failed.emit("peaks", "invalid peaks shape")
-                return
-            # Signed per-bin envelope: average channels, keep min (negative) and
-            # max (positive) separate, then interleave so compute_peaks re-bins
-            # into a symmetric min/max waveform instead of a top-half-only one.
-            lo = peaks_arr[:, :, 0].mean(axis=0)  # signed minima (≤ 0)
-            hi = peaks_arr[:, :, 1].mean(axis=0)  # signed maxima (≥ 0)
-            mono = np.empty(lo.size * 2, dtype=np.float32)
-            mono[0::2] = lo
-            mono[1::2] = hi
-
-            self.peaksReady.emit(seq, mono)
+            self.peaksReady.emit(seq, decode_waveform_mono_samples(path))
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("peaks", str(exc))
 
@@ -212,6 +241,113 @@ class IndexWorker(QObject):
         except Exception:  # noqa: BLE001
             self.metadataReady.emit(seq, None)
 
+    @Slot(int, str, object)
+    def request_render(self, seq: int, path: str, params) -> None:
+        """Render an edit of `path` to the Saved folder, auto-index it, reload.
+
+        `params` is a plain dict: region (start,end)|None, reverse, gain_db,
+        fade_in, fade_out, adsr (a,d,s,r). Emits renderReady(seq, dest_path).
+        """
+        from ..audio.editor import ADSR, dated_export_dir, default_export_name, render_edit, write_wav
+
+        try:
+            adsr_vals = params.get("adsr")
+            adsr = ADSR(*adsr_vals) if adsr_vals else None
+            edited, sr = render_edit(
+                path,
+                params.get("region"),
+                reverse=bool(params.get("reverse", False)),
+                gain_db=float(params.get("gain_db", 0.0)),
+                fade_in=float(params.get("fade_in", 0.0)),
+                fade_out=float(params.get("fade_out", 0.0)),
+                adsr=adsr,
+            )
+            dest = dated_export_dir(self._cfg.paths.saved_dir) / default_export_name(path)
+            write_wav(edited, sr, dest)
+            self._index_saved()
+            self.renderReady.emit(seq, str(dest))
+            self.request_reload()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("render", str(exc))
+
+    @Slot(int, str, object)
+    def request_preview_render(self, seq: int, path: str, params) -> None:
+        """Render an edit of `path` to a temp staging WAV for preview; emit previewReady.
+
+        Does NOT auto-index or reload — the staged file is throwaway.
+        """
+        import tempfile
+        from ..audio.editor import ADSR, render_edit, write_wav
+
+        try:
+            adsr_vals = params.get("adsr")
+            adsr = ADSR(*adsr_vals) if adsr_vals else None
+            edited, sr = render_edit(
+                path,
+                params.get("region"),
+                reverse=bool(params.get("reverse", False)),
+                gain_db=float(params.get("gain_db", 0.0)),
+                fade_in=float(params.get("fade_in", 0.0)),
+                fade_out=float(params.get("fade_out", 0.0)),
+                adsr=adsr,
+            )
+            tmpdir = Path(tempfile.gettempdir())
+            (tmpdir / f"cratedig_preview_{seq - 1}.wav").unlink(missing_ok=True)
+            dest = tmpdir / f"cratedig_preview_{seq}.wav"
+            write_wav(edited, sr, dest)
+            frames = edited.shape[0] if hasattr(edited, "shape") else len(edited)
+            duration = frames / float(max(1, sr))
+            self.previewReady.emit(seq, str(dest), duration)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("preview_render", str(exc))
+
+    @Slot(int, str, object)
+    def request_stage_render(self, seq: int, path: str, params) -> None:
+        """Pre-render an edit to a temp staging WAV for drag-export; emit stageReady.
+
+        Same as a preview render but the result is kept (not played) so a drag can
+        reuse it instead of rendering synchronously on the GUI thread.
+        """
+        import tempfile
+        from ..audio.editor import ADSR, render_edit, write_wav
+
+        try:
+            adsr_vals = params.get("adsr")
+            adsr = ADSR(*adsr_vals) if adsr_vals else None
+            edited, sr = render_edit(
+                path,
+                params.get("region"),
+                reverse=bool(params.get("reverse", False)),
+                gain_db=float(params.get("gain_db", 0.0)),
+                fade_in=float(params.get("fade_in", 0.0)),
+                fade_out=float(params.get("fade_out", 0.0)),
+                adsr=adsr,
+            )
+            tmpdir = Path(tempfile.gettempdir())
+            (tmpdir / f"cratedig_stage_{seq - 1}.wav").unlink(missing_ok=True)
+            dest = tmpdir / f"cratedig_stage_{seq}.wav"
+            write_wav(edited, sr, dest)
+            self.stageReady.emit(seq, str(dest))
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("stage_render", str(exc))
+
+    @Slot()
+    def request_index_saved(self) -> None:
+        """Re-scan the Saved folder (e.g. after a synchronous drag-export) and reload."""
+        try:
+            self._index_saved()
+            self.request_reload()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("index_saved", str(exc))
+
+    def _index_saved(self) -> None:
+        """Scan only the Saved folder so exports appear without a full re-scan."""
+        from ..scan import scan_directory
+
+        saved = self._cfg.paths.saved_dir
+        if saved.is_dir():
+            scan_directory(self._db, saved, self._cfg.audio.extensions, "edit", None)
+
     @Slot()
     def request_duplicates(self) -> None:
         """Find samples sharing a file_hash; emit the grouped list."""
@@ -229,6 +365,58 @@ class IndexWorker(QObject):
             self.searchReady.emit(seq, hits, used)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("search", str(exc))
+
+    @Slot()
+    def request_health(self) -> None:
+        """Compute a library health report and emit healthReady."""
+        from ..health import library_health
+        try:
+            ttl = int(self._cfg.metadata.get("cache_ttl_days", 30))
+            report = library_health(self._db, ttl_days=ttl, check_files=True)
+            self.healthReady.emit(report)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("health", str(exc))
+
+    @Slot()
+    def request_remove_missing(self) -> None:
+        """Delete DB rows whose file is missing on disk, then recompute health + reload."""
+        from ..health import missing_sample_ids
+        try:
+            for sid in missing_sample_ids(self._db):
+                self._db.delete_sample(sid)
+            self.request_health()
+            self.request_reload()
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("remove_missing", str(exc))
+
+    @Slot()
+    def request_refresh_metadata(self) -> None:
+        """Re-query metadata cache for the current download results.
+
+        The manager caches enrichment keyed by hit title/artist; calling
+        search_metadata_cache is a fast in-DB lookup with no network I/O.
+        Emits downloadDone(True, 'metadata refreshed') so the pane updates.
+        """
+        try:
+            mgr = self._manager()
+            if hasattr(mgr, "refresh_metadata_cache"):
+                mgr.refresh_metadata_cache()
+                self.downloadDone.emit(True, "metadata refreshed")
+            else:
+                # Honest signal: no refresh path wired yet (avoid false success).
+                self.failed.emit("refresh_metadata", "metadata refresh not available")
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("refresh_metadata", str(exc))
+
+    @Slot(int, object)
+    def request_als_match(self, seq: int, names) -> None:
+        """Build the basename index and match ALS sample names against the library."""
+        try:
+            index = self._db.samples_basename_index()
+            result = match_als_samples(list(names), index)
+            self.alsMatchReady.emit(seq, result)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("als_match", str(exc))
 
     @Slot(object)
     def request_download(self, hit) -> None:

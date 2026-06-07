@@ -8,6 +8,9 @@ db = "data/cratedig.db"
 download_dir = "data/downloads"
 # Folders scanned for local samples (the "Library" in Sononym terms).
 library_dirs = []
+# Where the Simpler editor exports rendered samples. Auto-scanned as a root
+# (rows get source='edit') and shown as the pinned "💾 Saved" tree branch.
+saved_dir = "data/_saved"
 
 [audio]
 # Analysis sample rate (Hz) used for feature extraction.
@@ -59,5 +62,12 @@ token = ""
 
 [metadata]
 # MusicBrainz requires a descriptive User-Agent.
-musicbrainz_useragent = "cratedig/0.1 (local use)"
+musicbrainz_useragent = "sufee@proton.me"
 discogs_token = ""
+# Reuse local MB/Discogs lookup results before refreshing stale entries.
+cache_ttl_days = 30
+# Keep live MB/Discogs search bounded; broad one-word searches use cache only.
+enable_search_ranking = true
+search_live_lookup = true
+search_live_lookup_min_words = 2
+search_max_live_lookup_hits = 3

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS samples (
     instrument_class TEXT,                         -- kick/snare/hat/clap/tom/cymbal/perc (auto-classified)
     mood          TEXT,
     waveform_preview TEXT,                         -- compact TUI row preview
+    classify_attempted INTEGER NOT NULL DEFAULT 0, -- set to 1 after classify_pending attempt
 
     -- feature vector for similarity (float32 little-endian blob) + dim for sanity
     feature_vector BLOB,
@@ -53,7 +54,22 @@ CREATE TABLE IF NOT EXISTS tags (
 CREATE TABLE IF NOT EXISTS sample_tags (
     sample_id INTEGER NOT NULL REFERENCES samples(id) ON DELETE CASCADE,
     tag_id    INTEGER NOT NULL REFERENCES tags(id) ON DELETE CASCADE,
+    source    TEXT NOT NULL DEFAULT 'manual',
     PRIMARY KEY (sample_id, tag_id)
+);
+
+CREATE TABLE IF NOT EXISTS crates (
+    id         INTEGER PRIMARY KEY,
+    name       TEXT NOT NULL UNIQUE,
+    created_at TEXT NOT NULL
+);
+
+CREATE TABLE IF NOT EXISTS crate_samples (
+    crate_id  INTEGER NOT NULL REFERENCES crates(id) ON DELETE CASCADE,
+    sample_id INTEGER NOT NULL REFERENCES samples(id) ON DELETE CASCADE,
+    position  INTEGER NOT NULL,
+    added_at  TEXT NOT NULL,
+    PRIMARY KEY (crate_id, sample_id)
 );
 
 -- Download queue / history.

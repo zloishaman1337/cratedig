@@ -9,7 +9,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .base import Downloader, DownloadRequest, DownloadResult, SearchHit, register
+from .base import (
+    Downloader, DownloadRequest, DownloadResult, SearchHit,
+    register, safe_filename, unique_path,
+)
 
 API = "https://freesound.org/apiv2"
 
@@ -79,7 +82,7 @@ class FreeSoundDownloader(Downloader):
         preview = hit.extra.get("preview")
         if not preview:
             return DownloadResult(ok=False, source=self.name, error="no preview url")
-        dest = dest_dir / f"freesound_{hit.id}_{_safe(hit.title)}.mp3"
+        dest = unique_path(dest_dir, safe_filename(hit.title, hit.artist), ".mp3")
         sess = self._session()
         with sess.get(preview, headers=self._headers(), stream=True, timeout=60) as resp:
             resp.raise_for_status()
@@ -96,7 +99,3 @@ class FreeSoundDownloader(Downloader):
         if not hits:
             return DownloadResult(ok=False, source=self.name, error="no results")
         return self.fetch_hit(hits[0], req.dest_dir)
-
-
-def _safe(name: str) -> str:
-    return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)[:60]

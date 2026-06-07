@@ -447,7 +447,7 @@ def test_als_explorer_gui_tab_count(als_file):
 
 
 def test_main_window_has_stacked_pages(tmp_path):
-    """Smoke test: MainWindow embeds samples + ALS as 2 stacked pages with a sidebar."""
+    """Smoke test: MainWindow embeds samples + ALS + Health as 3 stacked pages with a sidebar."""
     pytest.importorskip("PySide6")
 
     from PySide6.QtWidgets import QApplication, QStackedWidget
@@ -455,11 +455,12 @@ def test_main_window_has_stacked_pages(tmp_path):
     from cratedig.db import Database
     from cratedig.gui.main_window import MainWindow
     from cratedig.gui.als_explorer import AlsExplorerPanel
+    from cratedig.gui.health_panel import HealthPanel
 
     app = QApplication.instance() or QApplication([])
 
     cfg = Config(
-        paths=Paths(db=tmp_path / "m.db", download_dir=tmp_path / "dl", library_dirs=()),
+        paths=Paths(db=tmp_path / "m.db", download_dir=tmp_path / "dl", library_dirs=(), saved_dir=tmp_path / "_saved"),
         audio=AudioCfg(),
     )
     db = Database(tmp_path / "m.db")
@@ -467,11 +468,16 @@ def test_main_window_has_stacked_pages(tmp_path):
 
     stack = w.findChild(QStackedWidget)
     assert stack is not None
-    assert stack.count() == 2
+    assert stack.count() == 3
     assert isinstance(stack.widget(1), AlsExplorerPanel)
+    assert isinstance(stack.widget(2), HealthPanel)
 
     # Sidebar switches to the Ableton page.
     w._nav_ableton.click()
     assert stack.currentIndex() == 1
+
+    # Sidebar switches to the Health page.
+    w._nav_health.click()
+    assert stack.currentIndex() == 2
 
     w.close()

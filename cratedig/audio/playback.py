@@ -7,11 +7,25 @@ mp3/wav/flac files all follow the same path.
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
+
+
+def level_gain_db(ref_loudness: float, target_loudness: float) -> float:
+    """Return the dB gain to apply to target so its RMS level matches ref.
+
+    Formula: 20 * log10(ref / target).  Both arguments must be > 0.
+    """
+    if ref_loudness <= 0:
+        raise ValueError(f"ref_loudness must be positive, got {ref_loudness!r}")
+    if target_loudness <= 0:
+        raise ValueError(f"target_loudness must be positive, got {target_loudness!r}")
+    return float(20.0 * math.log10(ref_loudness / target_loudness))
+
 
 BLOCKS = " ▁▂▃▄▅▆▇█"
 WAVEFORM_EMPTY = "·"
@@ -84,6 +98,59 @@ def _envelope(samples: np.ndarray, *, bins: int, channels: int, sample_rate: int
 
     duration_sec = frames / float(sample_rate)
     return WaveformData(peaks, rms, duration_sec, sample_rate, channels)
+
+
+def decode_waveform_mono_samples(
+    path: str | Path,
+    *,
+    sample_rate: int = 44100,
+    max_seconds: int | None = None,
+) -> np.ndarray:
+    """Decode audio to a mono float32 buffer for high-resolution GUI drawing."""
+    ffmpeg = shutil.which("ffmpeg")
+    if not ffmpeg:
+        return _decode_waveform_mono_samples_soundfile(path)
+
+    cmd = [
+        ffmpeg,
+        "-hide_banner",
+        "-loglevel",
+        "error",
+        "-i",
+        str(path),
+    ]
+    if max_seconds is not None:
+        cmd += ["-t", str(max_seconds)]
+    cmd += [
+        "-f",
+        "f32le",
+        "-ac",
+        "1",
+        "-ar",
+        str(sample_rate),
+        "pipe:1",
+    ]
+    proc = subprocess.run(cmd, stdout=subprocess.PIPE, stderr=subprocess.PIPE, check=False)
+    if proc.returncode != 0:
+        err = proc.stderr.decode("utf-8", errors="replace").strip()
+        raise RuntimeError(err or "ffmpeg failed to decode audio")
+    samples = np.frombuffer(proc.stdout, dtype=np.float32)
+    return np.ascontiguousarray(samples[np.isfinite(samples)], dtype=np.float32)
+
+
+def _decode_waveform_mono_samples_soundfile(path: str | Path) -> np.ndarray:
+    try:
+        import soundfile as sf
+    except ImportError as exc:
+        raise RuntimeError("ffmpeg not found on PATH") from exc
+
+    try:
+        audio, _source_rate = sf.read(str(path), dtype="float32", always_2d=True)
+    except Exception as exc:
+        raise RuntimeError(f"ffmpeg not found on PATH and soundfile could not decode audio: {exc}") from exc
+    mono = audio.mean(axis=1) if audio.ndim == 2 else audio
+    mono = mono[np.isfinite(mono)]
+    return np.ascontiguousarray(mono, dtype=np.float32)
 
 
 def decode_waveform_data(

@@ -81,3 +81,21 @@ def test_scan_prunes_deleted_files_under_root_regardless_of_source(tmp_path):
     assert db.count_samples() == 1
     assert samples[0].path == str(outside.resolve())
     db.close()
+
+
+def test_scan_saved_updates_existing_local_row_to_edit(tmp_path):
+    saved = tmp_path / "_saved"
+    saved.mkdir()
+    audio = saved / "edit.wav"
+    _write_wav(audio)
+
+    db = Database(tmp_path / "s.db")
+    assert scan_directory(db, saved, extensions=(".wav",), source="local") == 1
+    assert db.all_samples()[0].source == "local"
+
+    assert scan_directory(db, saved, extensions=(".wav",), source="edit") == 0
+
+    samples = db.all_samples()
+    assert len(samples) == 1
+    assert samples[0].source == "edit"
+    db.close()

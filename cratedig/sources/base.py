@@ -51,6 +51,31 @@ class SearchHit:
         return str(preview) if preview else None
 
 
+_ILLEGAL = '<>:"/\\|?*'
+
+
+def safe_filename(title: str, artist: str = "") -> str:
+    """Filesystem-safe '<TRACK> - <ARTIST>' stem built from track metadata."""
+    title = (title or "").strip()
+    artist = (artist or "").strip()
+    stem = f"{title} - {artist}" if artist else title
+    stem = "".join(c for c in stem if c not in _ILLEGAL and c >= " ")
+    stem = " ".join(stem.split()).rstrip(". ")
+    return stem[:120] or "track"
+
+
+def unique_path(dest_dir: Path, stem: str, ext: str) -> Path:
+    """Path for stem+ext under dest_dir, suffixing ' (n)' to avoid clobber."""
+    if not ext.startswith("."):
+        ext = "." + ext
+    cand = dest_dir / f"{stem}{ext}"
+    n = 2
+    while cand.exists():
+        cand = dest_dir / f"{stem} ({n}){ext}"
+        n += 1
+    return cand
+
+
 REGISTRY: dict[str, type["Downloader"]] = {}
 
 

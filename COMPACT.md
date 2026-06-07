@@ -9,29 +9,38 @@ the library. Python 3.11+. Personal use. Web UI REMOVED (pivot to standalone des
 ## Module status
 | module | state | note |
 |---|---|---|
-| config | ✅ | TOML → typed Config |
-| db | ✅ | sqlite3, schema.sql, dataclasses; `samples.instrument_class` + `samples.category` (repurposed) columns added via `_ensure_sample_columns`; `metadata_cache` table + DB helpers added for incremental track metadata; `set_classification(id, category, instrument_class)` added; all prior schema migrations idempotent |
-| scan | ✅ | walk+probe, sha1, upsert; sets both `category` + `instrument_class` from filename; prunes deleted files under scanned roots |
-| audio.features/similarity | ✅ | 193-dim vector; `ASPECT_BLOCKS` maps Overall/Spectrum/Timbre/Pitch/Amplitude to sub-slices; `aspect_topk` (per-aspect cosine + mean); `cosine_topk` unchanged |
-| audio.analyzer | ✅ | BPM/key/loudness/waveform; `Descriptors` has `centroid_norm` + `zcr` for audio fallback |
-| audio.category | ✅ | `classify_category` (keywords→category), `classify_instrument` (keywords→class), `classify_from_audio(duration_sec, centroid_norm, zcr)` audio fallback |
-| index.py | ✅ | `analyze_pending` writes both fields via `COALESCE(?,col)` (never wipes good values); `classify_pending` fills both filename-only; `find_similar_aspects` thin wrapper |
+| config | ✅ | TOML → typed Config; `paths.saved_dir` (default `data/_saved`) for Simpler exports |
+| db | ✅ | sqlite3, schema.sql, dataclasses; `samples.instrument_class` + `samples.category` + `samples.classify_attempted`; `metadata_cache`; `sample_tags.source` manual/auto; `crates`+`crate_samples`; all schema migrations idempotent |
+| scan | ✅ | walk+probe, sha1, upsert; sets category+class from filename; prunes deleted files; `scan_libraries` also scans `paths.saved_dir` with source='edit' |
+| audio.features/similarity | ✅ | 193-dim vector; `ASPECT_BLOCKS` maps Overall/Spectrum/Timbre/Pitch/Amplitude; `aspect_topk`+`cosine_topk` |
+| audio.analyzer | ✅ | BPM/key/loudness/waveform; `Descriptors` has `centroid_norm`+`zcr` for audio fallback |
+| audio.playback | ✅ | `decode_waveform_mono_samples(path, sample_rate=44100)` true mono float32 PCM via ffmpeg with soundfile fallback; `level_gain_db(ref,target)=20*log10(ref/target)` RMS linear loudness helper |
+| audio.category | ✅ | `classify_category`, `classify_instrument`, `classify_from_audio(duration_sec,centroid_norm,zcr)` audio fallback |
+| audio.descriptors | ✅ | `derive_character_tags` → 27 tags; DSP tags: punchy/soft/clicky/subby/thin/noisy/clean/crunchy/metallic/tonal/percussive/long-tail/tight/muddy/airy/mono; helpers `_crest_factor/_attack_time/_band_flatness`; mutually-exclusive pairs enforced; tape/vinyl deferred-ML |
+| audio.editor | ✅ | pure-numpy: `apply_edit`/`render_edit`/`write_wav`/`ADSR`/`default_export_name`/`dated_export_dir`; `detect_transients`/`normalize_peak`/`trim_silence`/`snap_to_zero_crossing`/`auto_slice`/`_frames_rms`; flat/zero-signal guard; fade overlap fixed: `fo=min(n-fi,...)` so fade_in+fade_out>n no longer compound-attenuates |
+| health | ✅ | `HealthReport` dataclass + `library_health` + `missing_sample_ids` + `format_report`; `cratedig health` CLI; GUI dashboard wired |
+| dedup | ✅ | pure/deterministic no DB writes; `group_duplicates`/`pick_best`/`ResolutionPlan`/`plan_resolution`/`plan_all`/`is_generated_edit`; `cratedig dedup` dry-run CLI |
+| index.py | ✅ | `analyze_pending`/`classify_pending`/`tag_pending`/`find_similar_aspects`/`scan_libraries`; `classify_pending` WHERE now `AND classify_attempted=0` |
 | search.query | ✅ | parameterized SQL filters incl. category |
-| tui | ✅ | browse uses real collapsible Textual Tree; breadcrumb + DataTable per folder; hit tables show Year/Album and use matched metadata artist/title; `b` fav; `u` duplicates; `c` classify; auto-preview |
-| tui.browser | ✅ | `build_folder_tree` shared by TUI + GUI |
-| gui | ✅ | Favorite moved to checkable `_fav_btn` QPushButton in preview bar (shortcut F, replaces toolbar action); Find Similar has own row + 5 aspect QCheckBoxes (`_aspect_boxes`, Overall default-checked); toolbar holds Duplicates (D); ALS Explorer is now an embedded page via left sidebar navigator (Samples/Ableton `QStackedWidget`); Roadmap v2 §5/§2 done |
-| gui.sample_table | ✅ | columns: Filename/Class/Category/BPM/Key/SR/Tags/Duration/Similarity (Extension removed); `SimilarityBarDelegate` paints bar from `Qt.UserRole`; `set_samples(samples, tags, scores, show_path)` — scores clamped [0,1]; similar-mode Filename shows `logic.similar_name` + full-path tooltip; drag emits selected samples as local file URLs |
-| gui.metadata_panel | ✅ | NEW: compact read-only widget under preview; shows scan+analyze fields + embedded file tags (mutagen easy=True); `worker.metadataReady` / `request_metadata`; seq-guarded by `_current_seq`; tags list maxHeight 90 |
-| gui.worker | ✅ | `similarReady` is 4-arg (seq, samples, source_id, scores); `request_similar` takes aspects via `@Slot(int,int,int,object)` and batch-resolves hits with `db.get_samples_by_ids`; `request_metadata` added; `Signal(int,int,int,object)` used (NOT Q_ARG(object)) |
-| gui.download_pane | ✅ | permanent bottom section; `_search_seq` guard; hit table columns are Title/Artist/Year/Album/Duration/Backend and use matched metadata artist/title/album/year when available |
-| gui.als_explorer | ✅ | `AlsExplorerPanel(QWidget)`: embedded page inside MainWindow, reached via left sidebar "Ableton" nav button (index 1 of `QStackedWidget`); native Qt theme; drag&drop .als; RU/EN i18n; 3-tab QTabWidget (Instruments/Plugins/Tracks); info area + tabs split by vertical QSplitter (user-draggable); VST-scan tab/button REMOVED |
-| als (parser) | ✅ | `cratedig/als/parser.py`; stdlib-only (gzip+xml.etree); `parse_als(path)→dict`; AU plugin support (`AuPluginDevice`, classified via ComponentType fourcc `aumu`=instrument); VST3 via `DeviceType` (1=inst,2=fx); VST2 via `NumAudioInputs` fallback; every track dict + `main` dict now include aggregated `instruments: list[str]` and `plugins: list[str]` (names tagged `[VST2]/[VST3]/[AU]/[M4L]`); Ableton Live 10/11/12; racks depth ≤2; no new deps |
-| sources.yandex | ✅ | live-tested |
-| sources.youtube | ✅ | live-tested; ffmpeg on PATH required |
-| sources.freesound | ✅ | live-tested; proxy-bypass session |
-| sources.archive | ⚠️ | implemented, untested |
-| sources.manager | ✅ | modes: samples→FreeSound, tracks→merged Yandex+YouTube hits; tracks search now runs MusicBrainz/Discogs incremental-cache ranking via `cratedig/metadata/ranking.py`; explicit backend mode unchanged |
-| metadata (mb/discogs) | ⚠️ | Roadmap v2 §6b/§6c core wiring done: providers registered, incremental `metadata_cache` lookup/rank path wired into tracks search; `SearchHit.extra` enriches title/artist/album/year/score; MusicBrainz UA set to `sufee@proton.me`; Discogs token user-filled; live lookup now bounded/throttled for broad searches |
+| tui | ✅ | collapsible Tree; breadcrumb+DataTable per folder; `b` fav; `u` duplicates; `c` classify; auto-preview |
+| tui.browser | ✅ | `build_folder_tree` shared by TUI+GUI |
+| gui | ✅ | Fav=checkable `_fav_btn`; Find Similar has 5 aspect QCheckBoxes; ALS Explorer + Health Dashboard as sidebar pages; QStackedWidget now 3 pages (Samples/Ableton/Health); `DuplicatesDialog` modeless reveal/keep/resolve; `_ab_state` A/B audition (ABState frozen dataclass); `_ab_toggle_action` shortcut 'X' |
+| gui.logic | ✅ | `backend_badge(source)->(label,hex)`; `ABState(slot_a,slot_b,current)` frozen dataclass with set_a/set_b/toggle/active_id; `match_als_samples(names,index)->{found,candidates,unresolved}` |
+| gui.sample_table | ✅ | 9 cols: Filename/Class/Category/BPM/Key/SR/Tags/Duration/Similarity; drag emits file URLs; context menu Add to crate/New crate |
+| gui.metadata_panel | ✅ | compact read-only widget; mutagen easy tags; `worker.metadataReady`/`request_metadata`; seq-guarded |
+| gui.simpler_pane | ✅ | Draggable region+fade handles; loop pink region; ADSR overlay; live rendered-preview waveform; zoomable/pannable; playhead; Space toggle; Reverse/Loop/Gain/ADSR knobs; drag-export CopyAction only; Sensitivity knob; Markers checkbox; Normalize/Trim/Snap/Slice; `_staged_render_path`/`_stage_seq`/`_staged_key` pre-render for drag; `request_stage_render`/`set_staged_render_path`/`_consume_staged` |
+| gui.health_panel | ✅ | QStackedWidget page index 2; 2-col Metric/Value QTableWidget; Refresh + Remove Missing buttons; signals: `refresh_requested`, `remove_missing_requested` |
+| gui.worker | ✅ | `request_render`/`request_index_saved`/`request_delete`/`request_peaks`/`request_metadata`/`request_similar(aspects)`/`request_health`/`request_remove_missing`/`request_als_match`; NEW: `previewReady`+`request_preview_render` (throwaway temp); `stageReady`+`request_stage_render` (drag pre-render); `alsMatchReady` signal; `treeReady` 7-arg |
+| gui.download_pane | ✅ | `QProgressBar` 4 states: idle/busy-indeterminate/ok-green/fail-red; `set_progress(pct\|None)` float→determinate/None→indeterminate; `_refresh_meta_btn`+`refresh_metadata_requested` signal; `show_notification(text)`; `set_backend(source)`+`_backend_label` |
+| gui.als_explorer | ✅ | embedded page, sidebar "Ableton" nav; 3-tab QTabWidget Instruments/Plugins/Tracks + optional Library Match tab (added after match only); drag&drop .als; RU/EN i18n; `set_match_result`/`matchRequested`/`_btn_match` wired |
+| als (parser) | ✅ | stdlib-only; `parse_als(path)→dict`; AU/VST2/VST3/M4L; racks depth ≤2 |
+| sources.base | ✅ | `safe_filename`+`unique_path`; strips Windows-illegal chars, keeps unicode/cyrillic, caps 120 chars |
+| sources.yandex | ✅ | `<TRACK> - <ARTIST>.mp3` via `safe_filename`+`unique_path` |
+| sources.youtube | ✅ | ffmpeg on PATH required; `safe_filename`+`unique_path`; path from `requested_downloads[0].filepath` with glob fallback |
+| sources.freesound | ✅ | proxy-bypass session; `safe_filename`+`unique_path` |
+| sources.archive | ⚠️ | untested; keeps archive's own filename |
+| sources.manager | ✅ | samples→FreeSound; tracks→merged Yandex+YouTube; MusicBrainz/Discogs incremental-cache ranking |
+| metadata (mb/discogs) | ⚠️ | core wiring done; incremental `metadata_cache`; MB UA=`sufee@proton.me`; Discogs token user-filled; live lookup bounded/throttled |
 
 ## Stack decisions
 - Python + PySide6/Textual; librosa+cosine kNN; download = yt-dlp + yandex-music + freesound + archive.
@@ -43,61 +52,65 @@ the library. Python 3.11+. Personal use. Web UI REMOVED (pivot to standalone des
 - ffmpeg required on PATH for YouTube extraction and waveform decode (falls back to soundfile).
 - ffplay required on PATH for TUI/GUI playback and GUI download preview.
 - Similarity vector 193-dim; re-run `cratedig analyze` after vector-dim changes; mixed-dim candidates skipped.
-- `ASPECT_BLOCKS` slice boundaries: Spectrum [0,80) logmel, Timbre [80,134) mfcc+contrast, Pitch [134,158) chroma, Amplitude [158,193) envelope+scalars. `_b6==FEATURE_DIM` assertion.
-- Aspect cosine scores can be negative (cosine distance); scores clamped [0,1] only at UI store time.
-- `MainWindow._similar_requested = Signal(int,int,int,object)` — aspects list crosses worker boundary as Python object via QueuedConnection; `Q_ARG(object,…)` raises QMetaType error in this build.
-- `classify_pending` re-processes rows whose class stays None each run (churn on large libs — deferred).
-- `db.get_samples_by_ids(ids)` exists; `worker.request_similar` uses it instead of k separate `get_sample` calls.
-- Audio-derived class uses DB `duration_sec` (present after scan); `Descriptors` has no duration field.
-- Re-running scan prunes stale rows under each scanned root.
-- Folder keys from `tui.browser.build_folder_tree` are root-relative slash-joined strings; out-of-root falls back to "other/<basename>".
-- `_tree_rows` in tui/app.py is live — used in non-browse `refresh_results` path.
+- `ASPECT_BLOCKS` slice boundaries: Spectrum [0,80) logmel, Timbre [80,134) mfcc+contrast, Pitch [134,158) chroma, Amplitude [158,193) envelope+scalars.
+- Aspect cosine scores can be negative; clamped [0,1] only at UI store time.
+- `MainWindow._similar_requested = Signal(int,int,int,object)` — aspects list as Python object via QueuedConnection; `Q_ARG(object,…)` raises QMetaType error.
+- `classify_pending` churn PARTIALLY fixed: dominant fully-unrecognizable churn fixed via `classify_attempted=1` guard; partial rows (instrument hit but no category, e.g. kick_01.wav) still re-process every run because WHERE keeps `category IS NULL` — intentional/tested (test_database.py:320-322).
 - SQLite connection shared by threads; all `db.conn` access must be guarded by `Database.lock`.
 - Windows console cp1251 breaks Unicode — use `$env:PYTHONIOENCODING="utf-8"`.
-- FreeSound token = HQ mp3 previews only (full originals need OAuth2, skipped). Use "Client secret/Api key" as token.
-- Metadata cache is incremental/local-first only (no full Discogs/MusicBrainz dumps); TTL is `metadata.cache_ttl_days=30`.
-- Metadata live lookup is intentionally bounded: `search_live_lookup_min_words=2`, `search_max_live_lookup_hits=3`, one-word searches like `eminem` use cache only; negative misses are cached as `{}` to avoid repeated API calls.
-- MusicBrainz requires a real UA/contact and is configured as `sufee@proton.me`; Discogs still needs a user-supplied personal token in `[metadata] discogs_token`.
-- Local VPN proxy (127.0.0.1:2080) breaks TLS → empty results + pip errors. freesound.py uses `trust_env=False`.
+- FreeSound token = HQ mp3 previews only (full originals need OAuth2). Use "Client secret/Api key" as token.
+- Metadata cache TTL is `metadata.cache_ttl_days=30`; one-word searches use cache only; misses are negative-cached.
+- MusicBrainz UA/contact configured as `sufee@proton.me`; Discogs needs user-supplied personal token.
+- Local VPN proxy (127.0.0.1:2080) breaks TLS → empty results. freesound.py uses `trust_env=False`.
 - `db.toggle_favorite` re-enters same RLock — safe (Python RLock is reentrant per-thread).
-- send2trash is a `[gui]` extra — delete shows install hint if missing.
-- Explorer reveal: use single command string with quoted path (list-arg form breaks for paths with spaces).
-- `worker.treeReady` signal has 5 args (`roots, folders, samples, tags_by_id, all_tags`).
-- Right-click no longer auto-plays (selectRow removed from context menu).
-- `logic.tree_rows` emits `(None, "__library__", "Library", False)` row after favorites; root nodes reparented under `"__library__"`.
-- GUI waveform: filled envelope polygon (top L→R + bottom R→L); channels averaged as signed lo/hi pairs.
-- rename/move: FS op first then DB update; if DB fails, healed by next re-scan (documented intent).
-- GUI rename is stem-only; `files.rename_file()` preserves suffix.
-- ALS parser is stdlib-only — no new dependency; rides on the existing `[gui]` PySide6 extra.
-- `cratedig/als/parser.py` line ~612: `live_set.find("MasterTrack") or live_set.find("MainTrack")` triggers an ElementTree truthiness DeprecationWarning (verbatim from upstream; harmless — falls through only on an empty element).
-- ALS Explorer i18n: `_LANG` is a module-global in `als_explorer.py`; single-panel-instance contract — `T()` reads the global directly.
-- Standalone `als_explorer/` folder is now redundant (logic lives in `cratedig/als/`) but left in place untracked.
-- Mac ALS projects use `AuPluginDevice` (not `PluginDevice`); parser classifies AU via ComponentType fourcc `aumu`=instrument, else effect; `struct.error` caught on malformed fourcc.
-- `scan_vst_plugins`/`_vst_dirs`/`_collect_stems` in parser.py are unused by the GUI (dead app code); only `_match_plugin` is still exercised by tests — deferred removal decision.
+- send2trash is a `[gui]` extra; Saved/editor exports (`source='edit'` or under `paths.saved_dir`) physically unlinked directly.
+- Explorer reveal: single command string with quoted path (list-arg form breaks for paths with spaces).
+- `worker.treeReady` signal has 7 args (`nodes, favorites, crates, crate_samples_by_id, samples, tags_by_id, all_tags`).
+- `sample_tags.source`: `manual` for user tags, `auto` for DSP-derived; `Database.set_auto_tags_for` replaces only auto tags.
+- `paths.saved_dir` is required on `Paths` dataclass — direct `Paths(...)` construction in tests must pass it.
+- `logic.tree_rows` emits `(None, "__library__", "Library", False)` after favorites; root nodes reparented under `"__library__"`.
+- ALS parser: `live_set.find("MasterTrack") or live_set.find("MainTrack")` triggers ElementTree truthiness DeprecationWarning (harmless).
+- ALS Explorer `_LANG` is module-global; single-panel-instance contract.
+- SimplerPane drag trigger = mouse move beyond `startDragDistance()` on canvas without grabbing a handle; `exported`+file committed only on `CopyAction`, cancelled drops unlink the orphan.
+- SimplerPane rendered-preview/ADSR/loop paint uses unclamped `_region_view_x()`; handle picking uses clamped `_handle_x()`.
+- SimplerPane: `set_mono` auto-recomputes transients at current sensitivity; Slice button cycles region through `auto_slice()` regions; `_slices`/`_slice_idx` reset on `set_sample`.
+- Health page auto-refreshes on sidebar open (`_on_nav_clicked` idx==2); Remove Missing deletes DB rows for files absent on disk.
+- Downloaded files named `<TRACK> - <ARTIST>.<ext>` via `sources.base.safe_filename`; archive.py exempt.
+- `cfg.metadata` is a plain `dict` — read keys with `.get(...)`, NOT `getattr`.
+- `DuplicatesDialog` does not live-refresh after deletes; user re-opens via "D" toolbar action to re-query.
+- GUI thread blocking: `_on_preview_edit` + `SimplerPane._render_to_saved` call `render_edit`+`write_wav` on GUI thread; explicit export goes via worker; preview+drag now also go via worker (`request_preview_render`/`request_stage_render`) but real DAW end-to-end still needs manual verification.
+- A/B audition: loudness-leveling gain is COMPUTED in `MainWindow._play_ab_active` (via `level_gain_db`) but NOT applied to ffplay (AudioPlayer.play has no gain arg) — leveling is inert/deferred.
+- Download UX: `worker.request_refresh_metadata` emits `failed(...)` when manager has no `refresh_metadata_cache` (no false success); real re-enrich NOT implemented (DownloadManager.refresh_metadata_cache missing).
+- `match_als_samples` 'found' entry shape is inconsistent: single match → unwrapped Sample, multi → list — codified by tests; reveal-in-explorer and crate-from-match are deferred.
+- Temp renders (`cratedig_preview_`/`cratedig_stage_<seq>.wav`) cleaned up by unlinking previous-seq file only; a few stragglers may remain in %TEMP% across crashes.
 
 ## Verification
 - `python -m compileall cratedig` ok.
-- `pytest -q` ok: 252 passed, 29 ALS parser DeprecationWarnings (`ElementTree` truthiness at `parser.py:798`).
-- Focused checks this session: `pytest tests/test_database.py tests/test_sources_manager.py tests/test_gui_logic.py -q` 130 passed.
-- Prior GUI/ALS smoke: `AlsExplorerPanel` OK (`acceptDrops()` True, 3 tabs after `_load_file`, QSplitter present); GUI smoke on `example/minor rnb kazakh 93bpm.als`: 13 instrument rows / 14 plugin rows / 17 track rows; AU plugins (Kontakt 7, LABS, RC-20, etc.) now appear. `MainWindow` smoke OK (pre-v2: 10 table cols, 5 aspect boxes Overall-checked, `_fav_btn` checkable, MetadataPanel present, QStackedWidget 2 pages, sidebar switches to ALS page).
+- `pytest -q` → 552 passed (was 457), 29 ALS DeprecationWarnings. New test files this session: `tests/test_ab_audition.py`, `tests/test_download_pane.py`, `tests/test_als_library_matching.py`; additions to `test_editor.py`, `test_database.py`, `test_gui_logic.py`, `test_simpler_pane.py`.
+- `cratedig health` and `cratedig dedup` smoke-run OK on real 653-sample DB.
 
-## Roadmap v2 — planned epics (design locked 2026-06; see ARCHITECTURE.md "Roadmap v2")
-Build order 5→2→1→3→6→4 (cheap surgical first, Simpler last). All schema deltas additive.
-- §5 DONE: `Extension` removed from `sample_table._COLUMNS`; Duration/BPM/Key removed from `logic.format_metadata`; tests expect 9 columns/no duplicated metadata rows.
-- §2 DONE: sample table drag enabled; selected rows become local file URLs via `QMimeData.setUrls`; pure `logic.file_urls(samples)` added and tested. No schema.
-- §1 Smart character tags [DECIDED DSP, no ML]: new pure `audio/descriptors.py::derive_character_tags`; stored as TAGS (reuse tags/sample_tags). `index.tag_pending`. ADD `sample_tags.source` col (auto vs manual). GOTCHA: `wide` tag needs STEREO decode (features.py loads mono). genre labels (vinyl/jazz/soul/acoustic) stay keyword-only (ML deferred).
-- §3 Crates [DECIDED]: new tables `crates` + `crate_samples`; db CRUD; synthetic `📦 Crates` branch in `logic.tree_rows` (like Favorites); context-menu "Add to crate ▸"; whole-crate drag = all member URLs.
-- §6 Tracks search fix [DECIDED incremental cache]: 6a DONE (`manager.search` tracks mode gathers both Yandex and YouTube hits; used label is `yandex+youtube` when both contribute, single backend name when only one contributes). 6b/6c PARTIAL/core wiring DONE: `metadata_cache` table + DB helpers, MB/Discogs providers registered, `metadata/ranking.py` ranks merged track hits through incremental local-first cache, and `SearchHit.extra` enriches title/artist/album/year/score for GUI/TUI display. MusicBrainz = NO key; UA/contact configured as `sufee@proton.me`. Discogs = `pip install python3-discogs-client` + free personal token in `[metadata] discogs_token`. Runtime latency guard added after live test: one-word searches use cache only; live metadata lookup is limited to the first `metadata.search_max_live_lookup_hits=3` hits; misses are negative-cached. TTL is `metadata.cache_ttl_days=30`; NOT a full Discogs/MusicBrainz dump.
-- §4 Simpler editor [DECIDED full scope]: new `gui/simpler_pane.py` REPLACES waveform/preview zone (preview+editor dual role). Pure `audio/editor.py::render_edit` (numpy+soundfile: region/reverse/gain/fade/ADSR) + `write_wav`. Edits render→temp WAV→ffplay (AudioPlayer can't play numpy). Export→`paths.saved_dir` (new config, scanned root, source='edit', `💾 Saved` branch); drag-from-waveform renders to Saved + drops URL to DAW. Worker `request_render`/`renderReady`.
+## Pre-redesign stabilization roadmap — LOCKED 2026-06-06
+Do these before visual redesign; see ARCHITECTURE.md for acceptance details.
+- Cleanup/docs: DONE.
+- Drag-to-DAW reliability: DONE (render-before-exec correct; CopyAction only; cancelled drops unlink orphan; pre-render via `request_stage_render`). REMAINING: manual real-DAW end-to-end with spaces/non-ASCII paths.
+- Download/metadata UX: MOSTLY DONE — progress bar+colored completion, `<TRACK> - <ARTIST>` naming, `set_progress`, `show_notification`, `set_backend`/`_backend_label`, `refresh_metadata_requested` signal, `backend_badge`. REMAINING: real metadata re-enrich backend; progress % real only for yt-dlp (others indeterminate).
+- Simpler editing intelligence: DONE — live transient markers; Sensitivity knob; Normalize/Trim/Snap/Slice; pre-render for drag.
+- Duplicates resolver: DONE. REMAINING: dialog does not live-refresh after deletes.
+- Library health dashboard: DONE.
+- Expanded character auto-tags: DONE (27 tags; tape/vinyl deferred-ML).
+- ALS Explorer library matching: DONE core — `match_als_samples`, worker slot, panel Library Match tab. REMAINING: reveal-in-explorer and crate-from-match not wired.
+- A/B audition workflow: MOSTLY DONE — `ABState` dataclass, set_a/set_b/toggle, shortcut 'X', `apply_loudness_leveling` flag. REMAINING: loudness leveling inert (AudioPlayer.play has no gain arg).
+- Classify_pending churn: DONE for fully-unrecognized rows (classify_attempted column). Partial-churn intentional/tested.
+- Render→worker: DONE — `request_preview_render`/`previewReady`, `request_stage_render`/`stageReady`; SimplerPane uses staged-or-sync fallback.
+- Redesign gate: NOT YET — remaining items above must close first.
 
-## Next session TODO (carry-over, pre-v2)
-- Modernize GUI styling (Foleyard-like) once feature set lands.
-- GUI download live-test via Qt UI (worker thread / download pane) — manager-level path verified; Qt worker path still pending.
+## Deferred/backlog
 - sources.archive live-test (untested backend).
-- Consider hnswlib ANN for large libraries (deferred — brute force fine at personal scale).
-- MEDIUM: `classify_pending` churn on large libs (re-processes None-class rows every run).
-- LOW: remove redundant standalone `als_explorer/` folder (logic now lives in `cratedig/als/`).
-- LOW: decide whether to remove dead `scan_vst_plugins`/`_vst_dirs`/`_collect_stems` from parser.py (unused by GUI; kept for tests).
+- Consider hnswlib ANN for large libraries (brute force fine at personal scale).
+- A/B loudness leveling: apply computed gain to ffplay (AudioPlayer.play needs gain arg).
+- Download metadata re-enrich: implement DownloadManager.refresh_metadata_cache.
+- ALS match reveal-in-explorer + crate-from-match not yet wired.
+- `match_als_samples` found-entry shape inconsistency (single→unwrapped vs multi→list) — codified, may need unification.
 
 ## Authoritative files
 - ARCHITECTURE.md — full design + roadmap

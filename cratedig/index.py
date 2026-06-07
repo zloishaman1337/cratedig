@@ -25,6 +25,11 @@ def scan_libraries(
     for d in cfg.paths.library_dirs:
         if d.is_dir():
             total += scan_directory(db, d, cfg.audio.extensions, "local", progress)
+    # The Saved folder is a scanned root too, so Simpler exports auto-index;
+    # its rows are tagged source='edit' for the pinned "Saved" tree branch.
+    saved = cfg.paths.saved_dir
+    if saved.is_dir():
+        total += scan_directory(db, saved, cfg.audio.extensions, "edit", progress)
     return total
 
 
@@ -88,25 +93,82 @@ def classify_pending(
     with db.lock:
         rows = db.conn.execute(
             "SELECT id, path FROM samples "
-            "WHERE category IS NULL OR category = '' OR instrument_class IS NULL"
+            "WHERE (category IS NULL OR category = '' OR instrument_class IS NULL) "
+            "AND classify_attempted = 0"
         ).fetchall()
 
     done = 0
-    updates: list[tuple[str | None, str | None, int]] = []
+    updates: list[tuple[str | None, str | None, int, int]] = []
     for r in rows:
         cat = classify_category(r["path"]) or None
         instr = classify_instrument(r["path"]) or None
-        updates.append((cat, instr, int(r["id"])))
+        # Only mark attempted when filename yields nothing; rows with at least
+        # one good result stay at attempted=0 so future passes can refine them.
+        attempted = 1 if (cat is None and instr is None) else 0
+        updates.append((cat, instr, attempted, int(r["id"])))
         done += 1
         if progress:
             progress(done, len(rows))
     if updates:
         with db.lock:
             db.conn.executemany(
-                "UPDATE samples SET category=?, instrument_class=? WHERE id=?",
+                "UPDATE samples SET "
+                "category=COALESCE(?, category), "
+                "instrument_class=COALESCE(?, instrument_class), "
+                "classify_attempted=? "
+                "WHERE id=?",
                 updates,
             )
             db.conn.commit()
+    return done
+
+
+def tag_pending(
+    db: Database, cfg: Config, progress: Callable[[int, int], None] | None = None
+) -> int:
+    """Derive character tags for indexed audio and replace only prior auto tags."""
+    from .audio.descriptors import derive_character_tags
+
+    try:
+        import librosa
+    except ImportError as e:  # pragma: no cover - env dependent
+        raise RuntimeError(
+            "Auto-tagging needs librosa. Install: pip install 'cratedig[analysis]'"
+        ) from e
+
+    with db.lock:
+        rows = db.conn.execute(
+            """
+            SELECT id, path FROM samples s
+            WHERE (analyzed_at IS NOT NULL OR feature_vector IS NOT NULL OR waveform_preview IS NOT NULL)
+            AND NOT EXISTS (
+                SELECT 1 FROM sample_tags st
+                WHERE st.sample_id=s.id AND st.source='auto'
+            )
+            ORDER BY indexed_at DESC
+            """
+        ).fetchall()
+
+    done = 0
+    for r in rows:
+        sid, path = int(r["id"]), r["path"]
+        if not Path(path).is_file():
+            continue
+        try:
+            y_stereo, sr = librosa.load(path, sr=cfg.audio.analysis_sr, mono=False)
+        except Exception:
+            continue
+        y_arr = getattr(y_stereo, "ndim", 0)
+        if y_arr == 2:
+            y_mono = y_stereo.mean(axis=0)
+        else:
+            y_mono = y_stereo
+            y_stereo = None
+        tags = derive_character_tags(y_mono, y_stereo, sr)
+        db.set_auto_tags_for(sid, tags)
+        done += 1
+        if progress:
+            progress(done, len(rows))
     return done
 
 

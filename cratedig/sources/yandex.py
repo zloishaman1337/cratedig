@@ -10,7 +10,10 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from .base import Downloader, DownloadRequest, DownloadResult, SearchHit, register
+from .base import (
+    Downloader, DownloadRequest, DownloadResult, SearchHit,
+    register, safe_filename, unique_path,
+)
 
 
 @register("yandex")
@@ -79,9 +82,7 @@ class YandexDownloader(Downloader):
         if not tracks:
             return DownloadResult(ok=False, source=self.name, error="track not found")
         track = tracks[0]
-        safe_artist = _safe(hit.artist) if hit.artist else "unknown"
-        safe_title = _safe(hit.title)
-        dest = dest_dir / f"yandex_{track_id}_{safe_artist}_{safe_title}.mp3"
+        dest = unique_path(dest_dir, safe_filename(hit.title, hit.artist), ".mp3")
         try:
             track.download(str(dest), codec="mp3", bitrate_in_kbps=320)
         except Exception as e:
@@ -106,10 +107,6 @@ class YandexDownloader(Downloader):
         if not hits:
             return DownloadResult(ok=False, source=self.name, error="no results")
         return self.fetch_hit(hits[0], req.dest_dir)
-
-
-def _safe(name: str) -> str:
-    return "".join(c if c.isalnum() or c in "-_" else "_" for c in name)[:60]
 
 
 def _extract_track_id(url: str) -> str | None:

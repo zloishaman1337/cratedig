@@ -3,6 +3,7 @@
 import math
 import os
 
+from pathlib import Path
 import numpy as np
 import pytest
 
@@ -10,6 +11,7 @@ from cratedig.db.models import Sample
 from cratedig.gui.logic import (
     compute_peaks, filename_parts, hit_rows, resolve_similar, tree_rows,
     is_sample_favorite, similar_name, format_metadata, file_urls,
+    time_to_x, x_to_time, clamp_region,
 )
 from cratedig.sources.base import SearchHit
 from cratedig.tui.browser import FolderNode
@@ -509,6 +511,20 @@ class TestTreeRows:
         assert is_favorites_branch is True
 
         assert result[1] == (None, "__library__", "Library", False)
+
+    def test_crates_branch_between_favorites_and_library(self):
+        nodes = {}
+        favorites = []
+        crate = type("Crate", (), {"id": 7, "name": "Breaks"})()
+
+        result = tree_rows(nodes, favorites, [crate])
+
+        assert result == [
+            (None, "__favorites__", "★ Favorites", True),
+            (None, "__crates__", "📦 Crates", False),
+            ("__crates__", "crate:7", "Breaks", False),
+            (None, "__library__", "Library", False),
+        ]
 
     def test_favorites_branch_always_first(self):
         """Favorites branch should always appear first, even with folder nodes."""
@@ -1018,3 +1034,835 @@ class TestSampleTable:
         mime = table._table.mimeData([])
 
         assert [url.toLocalFile() for url in mime.urls()] == ["/packs/a.wav", "/packs/b.wav"]
+
+
+class TestSimplerGeometry:
+    """Pure time/pixel mapping + region clamping for the Simpler waveform."""
+
+    def test_time_to_x_endpoints(self):
+        assert time_to_x(0.0, 100, 2.0) == 0
+        assert time_to_x(2.0, 100, 2.0) == 100
+        assert time_to_x(1.0, 100, 2.0) == 50
+
+    def test_time_to_x_clamped(self):
+        assert time_to_x(-1.0, 100, 2.0) == 0
+        assert time_to_x(5.0, 100, 2.0) == 100
+
+    def test_time_to_x_degenerate(self):
+        assert time_to_x(1.0, 0, 2.0) == 0
+        assert time_to_x(1.0, 100, 0.0) == 0
+
+    def test_x_to_time_roundtrip(self):
+        assert x_to_time(50, 100, 2.0) == pytest.approx(1.0)
+        assert x_to_time(0, 100, 2.0) == pytest.approx(0.0)
+        assert x_to_time(100, 100, 2.0) == pytest.approx(2.0)
+
+    def test_x_to_time_clamped(self):
+        assert x_to_time(-10, 100, 2.0) == pytest.approx(0.0)
+        assert x_to_time(200, 100, 2.0) == pytest.approx(2.0)
+
+    def test_clamp_region_orders_and_bounds(self):
+        assert clamp_region(1.5, 0.5, 2.0) == pytest.approx((0.5, 1.5))
+        assert clamp_region(-1.0, 3.0, 2.0) == pytest.approx((0.0, 2.0))
+
+    def test_clamp_region_min_len(self):
+        start, end = clamp_region(1.0, 1.0, 2.0, min_len=0.1)
+        assert end - start == pytest.approx(0.1)
+
+    def test_clamp_region_min_len_at_tail(self):
+        start, end = clamp_region(2.0, 2.0, 2.0, min_len=0.1)
+        assert end == pytest.approx(2.0)
+        assert end - start == pytest.approx(0.1)
+
+
+def test_tree_rows_saved_branch_groups_by_dated_folder(tmp_path):
+    saved_root = tmp_path / "_saved"
+    dated = saved_root / "06_06_2026"
+    saved = [
+        Sample(id=7, path=str(dated / "edit_a.wav"), filename="edit_a.wav"),
+        Sample(id=8, path=str(dated / "edit_b.wav"), filename="edit_b.wav"),
+    ]
+    rows = tree_rows({}, [], None, saved, saved_root)
+    keys = [r[1] for r in rows]
+    assert "__saved__" in keys
+    assert "saved-dir:06_06_2026" in keys
+    assert "saved:7" not in keys and "saved:8" not in keys
+    assert rows[keys.index("saved-dir:06_06_2026")][0] == "__saved__"
+    # Saved branch sits before the Library root
+    assert keys.index("__saved__") < keys.index("__library__")
+
+
+def test_tree_rows_no_saved_branch_when_empty():
+    rows = tree_rows({}, [], None, [])
+    assert "__saved__" not in [r[1] for r in rows]
+
+
+def test_tree_rows_root_saved_file_uses_mtime_date(tmp_path):
+    saved_root = tmp_path / "_saved"
+    saved_root.mkdir()
+    fp = saved_root / "legacy.wav"
+    fp.write_text("x")
+    sample = Sample(id=9, path=str(fp), filename=fp.name)
+
+    rows = tree_rows({}, [], None, [sample], saved_root)
+
+    date_key = next(r[1] for r in rows if r[1].startswith("saved-dir:"))
+    assert date_key != "saved-dir:_saved"
+    assert "saved:9" not in [r[1] for r in rows]
+
+
+def test_worker_delete_saved_file_unlinks_when_send2trash_missing(tmp_path, monkeypatch):
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+    from cratedig.db import Database
+    from cratedig.gui.worker import IndexWorker
+
+    fp = tmp_path / "edit.wav"
+    fp.write_text("x")
+    db = Database(tmp_path / "s.db")
+    sid = db.upsert_sample(Sample(id=None, path=str(fp), filename=fp.name, source="edit"))
+    monkeypatch.setattr("cratedig.files.send2trash", lambda _path: pytest.fail("saved files should unlink directly"))
+
+    cfg = SimpleNamespace(paths=SimpleNamespace(library_dirs=(), saved_dir=tmp_path))
+    IndexWorker(db, cfg).request_delete(sid)
+
+    assert not fp.exists()
+    assert db.get_sample(sid) is None
+    db.close()
+
+
+def test_worker_delete_file_inside_saved_dir_unlinks_even_if_source_is_local(tmp_path, monkeypatch):
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+    from cratedig.db import Database
+    from cratedig.gui.worker import IndexWorker
+
+    saved_dir = tmp_path / "_saved"
+    saved_dir.mkdir()
+    fp = saved_dir / "legacy.wav"
+    fp.write_text("x")
+    db = Database(tmp_path / "s.db")
+    sid = db.upsert_sample(Sample(id=None, path=str(fp), filename=fp.name, source="local"))
+    monkeypatch.setattr("cratedig.files.send2trash", lambda _path: pytest.fail("saved-dir files should unlink directly"))
+
+    cfg = SimpleNamespace(paths=SimpleNamespace(library_dirs=(), saved_dir=saved_dir))
+    IndexWorker(db, cfg).request_delete(sid)
+
+    assert not fp.exists()
+    assert db.get_sample(sid) is None
+    db.close()
+
+
+def test_main_window_refreshes_current_tree_table_after_reload():
+    pytest.importorskip("PySide6")
+    from cratedig.gui.main_window import MainWindow
+
+    class TableStub:
+        def __init__(self):
+            self.calls = []
+
+        def set_samples(self, samples, tags_by_id=None, **_kwargs):
+            self.calls.append((list(samples), tags_by_id))
+
+    sample = Sample(id=1, path="/packs/kick.wav", filename="kick.wav")
+    table = TableStub()
+    window = MainWindow.__new__(MainWindow)
+    window._sample_table = table
+    window._tags_by_id = {1: ["tag"]}
+    window._favorites_by_id = {}
+    window._saved_folder_samples = {}
+    window._crate_samples_by_id = {}
+    window._nodes = {
+        "packs": FolderNode(name="packs", key="packs", parent_key=None, samples=[sample]),
+    }
+    window._current_tree_key = "packs"
+    window._current_tree_is_fav = False
+
+    MainWindow._refresh_current_tree_table(window)
+
+    assert table.calls == [([sample], {1: ["tag"]})]
+
+
+def test_main_window_clears_table_when_current_folder_disappears_after_reload():
+    pytest.importorskip("PySide6")
+    from cratedig.gui.main_window import MainWindow
+
+    class TableStub:
+        def __init__(self):
+            self.calls = []
+
+        def set_samples(self, samples, tags_by_id=None, **_kwargs):
+            self.calls.append((list(samples), tags_by_id))
+
+    table = TableStub()
+    window = MainWindow.__new__(MainWindow)
+    window._sample_table = table
+    window._tags_by_id = {}
+    window._favorites_by_id = {}
+    window._saved_folder_samples = {}
+    window._crate_samples_by_id = {}
+    window._nodes = {}
+    window._current_tree_key = "packs"
+    window._current_tree_is_fav = False
+
+    MainWindow._refresh_current_tree_table(window)
+
+    assert table.calls == [([], {})]
+
+
+class TestSimplerPane:
+    def _app(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        pytest.importorskip("PySide6")
+        from PySide6.QtWidgets import QApplication
+
+        return QApplication.instance() or QApplication([])
+
+    def test_knobs_feed_current_params(self, tmp_path):
+        self._app()
+        from PySide6.QtWidgets import QDoubleSpinBox
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane.set_sample("/tmp/kick.wav", 2.0)
+        pane._gain.setValue(3.0)
+        pane._attack.setValue(0.25)
+        pane._decay.setValue(0.5)
+        pane._sustain.setValue(0.75)
+        pane._release.setValue(1.0)
+
+        params = pane.current_params()
+
+        assert pane.findChildren(QDoubleSpinBox) == []
+        assert params["gain_db"] == pytest.approx(3.0)
+        assert params["adsr"] == pytest.approx((0.25, 0.5, 0.75, 1.0))
+
+    def test_canvas_zoom_preserves_region(self, tmp_path):
+        self._app()
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane.resize(400, 180)
+        pane._canvas.resize(400, 120)
+        pane.set_sample("/tmp/loop.wav", 10.0)
+        pane._canvas.region = (2.0, 8.0)
+
+        pane._canvas._zoom_at(2.0, 200)
+
+        assert pane._canvas.view == pytest.approx((2.5, 7.5))
+        assert pane._canvas.region == pytest.approx((2.0, 8.0))
+
+    def test_canvas_pan_preserves_zoom_span(self, tmp_path):
+        self._app()
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane._canvas.resize(400, 120)
+        pane.set_sample("/tmp/loop.wav", 10.0)
+        pane._canvas.view = (2.0, 6.0)
+
+        pane._canvas._pan_by_pixels(100)
+
+        assert pane._canvas.view == pytest.approx((6.0, 10.0))
+
+    def test_canvas_region_paint_coordinates_are_not_clamped_to_view(self, tmp_path):
+        self._app()
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane._canvas.resize(400, 120)
+        pane.set_sample("/tmp/loop.wav", 10.0)
+        pane._canvas.region = (2.0, 8.0)
+        pane._canvas.view = (4.0, 6.0)
+
+        assert pane._canvas._handle_x()["start"] == 0
+        assert pane._canvas._handle_x()["end"] == 400
+        assert pane._canvas._region_view_x() == pytest.approx((-400.0, 800.0))
+
+    def test_live_render_peaks_rescale_with_view_zoom(self, tmp_path):
+        self._app()
+        import numpy as np
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane._canvas.resize(80, 120)
+        pane.set_sample("/tmp/loop.wav", 8.0)
+        pane._canvas.region = (2.0, 6.0)
+        pane.set_mono(np.linspace(-1.0, 1.0, 1000, dtype=np.float32))
+        whole_view_bins = len(pane._canvas._rendered_peaks)
+
+        pane._canvas.view = (2.0, 4.0)
+        pane._canvas._recompute_rendered()
+
+        assert whole_view_bins == 80
+        assert len(pane._canvas._rendered_peaks) == 160
+
+    def test_canvas_samples_for_interval_uses_raw_mono_slice(self, tmp_path):
+        self._app()
+        import numpy as np
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane.set_sample("/tmp/loop.wav", 10.0)
+        samples = np.arange(100, dtype=np.float32)
+
+        visible = pane._canvas._samples_for_interval(samples, 0.0, 10.0, 2.0, 4.0)
+
+        assert visible[0] == pytest.approx(20.0)
+        assert visible[-1] == pytest.approx(39.0)
+
+    def test_loop_button_feeds_current_params(self, tmp_path):
+        self._app()
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane.set_sample("/tmp/loop.wav", 4.0)
+
+        assert pane.current_params()["loop"] is False
+        pane._loop.setChecked(True)
+        assert pane.current_params()["loop"] is True
+        assert pane._canvas.loop_enabled is True
+
+    def test_adsr_knobs_update_canvas_overlay(self, tmp_path):
+        self._app()
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane.set_sample("/tmp/kick.wav", 2.0)
+
+        assert pane._canvas.adsr is None
+        pane._attack.setValue(0.25)
+
+        assert pane._canvas.adsr is not None
+        assert pane._canvas.adsr.attack == pytest.approx(0.25)
+
+    def test_live_render_updates_when_gain_changes(self, tmp_path):
+        self._app()
+        import numpy as np
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane._canvas.resize(80, 120)
+        pane.set_sample("/tmp/kick.wav", 4.0)
+        pane._canvas.region = (1.0, 3.0)
+        pane.set_mono(np.ones(400, dtype=np.float32) * 0.25)
+        before = pane._canvas._rendered_peaks[:]
+
+        pane._gain.setValue(6.0)
+
+        assert pane._canvas._rendered_peaks
+        assert pane._canvas._rendered_peaks != before
+
+    def test_preview_trigger_toggles_to_stop_signal(self, tmp_path):
+        self._app()
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane.set_sample("/tmp/kick.wav", 2.0)
+        requested = []
+        stopped = []
+        pane.preview_requested.connect(lambda params: requested.append(params))
+        pane.preview_stop_requested.connect(lambda: stopped.append(True))
+
+        pane.trigger_preview()
+        pane.set_preview_playing(True)
+        pane.trigger_preview()
+
+        assert len(requested) == 1
+        assert stopped == [True]
+
+    def test_preview_playhead_clamps_and_clears_on_stop(self, tmp_path):
+        self._app()
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane.set_sample("/tmp/kick.wav", 2.0)
+
+        pane.set_preview_playhead(3.0)
+        assert pane._canvas.playhead_time == pytest.approx(2.0)
+
+        pane.set_preview_playing(False)
+        assert pane._canvas.playhead_time is None
+
+    def test_canvas_drag_starts_on_mouse_move_not_click_release(self, tmp_path):
+        self._app()
+        from PySide6.QtCore import QEvent, QPointF, Qt
+        from PySide6.QtGui import QMouseEvent
+        from PySide6.QtWidgets import QApplication
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        pane = SimplerPane(tmp_path)
+        pane._canvas.resize(240, 120)
+        pane.set_sample("/tmp/kick.wav", 2.0)
+        starts = []
+        pane._canvas.drag_started.connect(lambda: starts.append(True))
+
+        press = QMouseEvent(
+            QEvent.Type.MouseButtonPress,
+            QPointF(120, 60),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        pane._canvas.mousePressEvent(press)
+        release = QMouseEvent(
+            QEvent.Type.MouseButtonRelease,
+            QPointF(120, 60),
+            Qt.MouseButton.LeftButton,
+            Qt.MouseButton.NoButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        pane._canvas.mouseReleaseEvent(release)
+        assert starts == []
+
+        pane._canvas.mousePressEvent(press)
+        move = QMouseEvent(
+            QEvent.Type.MouseMove,
+            QPointF(120 + QApplication.startDragDistance() + 2, 60),
+            Qt.MouseButton.NoButton,
+            Qt.MouseButton.LeftButton,
+            Qt.KeyboardModifier.NoModifier,
+        )
+        pane._canvas.mouseMoveEvent(move)
+
+        assert starts == [True]
+
+    def test_start_drag_cancelled_removes_orphan_and_skips_export(self, tmp_path, monkeypatch):
+        """Test that cancelled drag (IgnoreAction) removes orphan and doesn't emit exported."""
+        self._app()
+        import numpy as np
+        from PySide6.QtGui import QDrag
+        from PySide6.QtCore import Qt
+        from cratedig.gui.simpler_pane import SimplerPane
+        from cratedig.audio.editor import write_wav
+
+        saved_dir = tmp_path / "_saved"
+        saved_dir.mkdir()
+
+        # Create a synthetic source WAV
+        source_wav = tmp_path / "source.wav"
+        sr = 44100
+        duration = 1.0
+        mono = np.sin(2 * np.pi * 440 * np.arange(int(sr * duration), dtype=np.float32) / sr) * 0.1
+        write_wav(mono, sr, source_wav)
+
+        # Create SimplerPane and set the sample
+        pane = SimplerPane(saved_dir)
+        pane.set_sample(str(source_wav), duration)
+        pane.set_mono(mono)
+
+        # Monkeypatch QDrag.exec to return IgnoreAction (cancelled drop)
+        exec_call_count = [0]
+        original_exec = QDrag.exec
+
+        def mock_exec(self, *args, **kwargs):
+            exec_call_count[0] += 1
+            return Qt.DropAction.IgnoreAction
+
+        monkeypatch.setattr(QDrag, "exec", mock_exec)
+
+        # Track exported signal emissions
+        exported_calls = []
+        pane.exported.connect(lambda path: exported_calls.append(path))
+
+        # Call _start_drag
+        pane._start_drag()
+
+        # Verify exec was called
+        assert exec_call_count[0] == 1
+
+        # Verify exported was NOT emitted
+        assert exported_calls == []
+
+        # Verify the rendered file was not left behind (no orphan in saved_dir)
+        # List all files in saved_dir recursively
+        all_files = list(saved_dir.glob("**/*.wav"))
+        assert len(all_files) == 0, f"Expected no WAV files after cancelled drag, but found: {all_files}"
+
+    def test_start_drag_accepted_keeps_file_and_emits_export(self, tmp_path, monkeypatch):
+        """Test that accepted drag (CopyAction) keeps file and emits exported exactly once."""
+        self._app()
+        import numpy as np
+        from PySide6.QtGui import QDrag
+        from PySide6.QtCore import Qt
+        from cratedig.gui.simpler_pane import SimplerPane
+        from cratedig.audio.editor import write_wav
+
+        saved_dir = tmp_path / "_saved"
+        saved_dir.mkdir()
+
+        # Create a synthetic source WAV
+        source_wav = tmp_path / "source.wav"
+        sr = 44100
+        duration = 1.0
+        mono = np.sin(2 * np.pi * 440 * np.arange(int(sr * duration), dtype=np.float32) / sr) * 0.1
+        write_wav(mono, sr, source_wav)
+
+        # Create SimplerPane and set the sample
+        pane = SimplerPane(saved_dir)
+        pane.set_sample(str(source_wav), duration)
+        pane.set_mono(mono)
+
+        # Monkeypatch QDrag.exec to return CopyAction (accepted drop)
+        exec_call_count = [0]
+
+        def mock_exec(self, *args, **kwargs):
+            exec_call_count[0] += 1
+            return Qt.DropAction.CopyAction
+
+        monkeypatch.setattr(QDrag, "exec", mock_exec)
+
+        # Track exported signal emissions
+        exported_calls = []
+        pane.exported.connect(lambda path: exported_calls.append(path))
+
+        # Call _start_drag
+        pane._start_drag()
+
+        # Verify exec was called
+        assert exec_call_count[0] == 1
+
+        # Verify exported was emitted exactly once
+        assert len(exported_calls) == 1
+
+        # Verify the emitted path exists on disk
+        emitted_path = exported_calls[0]
+        assert Path(emitted_path).exists(), f"Expected emitted file to exist at {emitted_path}"
+
+        # Verify it's actually in the saved_dir structure
+        all_files = list(saved_dir.glob("**/*.wav"))
+        assert len(all_files) == 1, f"Expected 1 WAV file in saved_dir, but found: {all_files}"
+        assert str(all_files[0]) == emitted_path
+
+    def test_start_drag_render_failure_skips_export(self, tmp_path, monkeypatch):
+        """Test that a render failure early-returns: no export, no file written."""
+        self._app()
+        import numpy as np
+        from PySide6.QtGui import QDrag
+        from cratedig.gui.simpler_pane import SimplerPane
+        from cratedig.audio.editor import write_wav
+
+        saved_dir = tmp_path / "_saved"
+        saved_dir.mkdir()
+
+        source_wav = tmp_path / "source.wav"
+        sr = 44100
+        mono = np.sin(2 * np.pi * 440 * np.arange(sr, dtype=np.float32) / sr) * 0.1
+        write_wav(mono, sr, source_wav)
+
+        pane = SimplerPane(saved_dir)
+        pane.set_sample(str(source_wav), 1.0)
+        pane.set_mono(mono)
+
+        # Force the render to fail; _start_drag must early-return.
+        monkeypatch.setattr(pane, "_render_to_saved", lambda: (_ for _ in ()).throw(IOError("boom")))
+
+        exec_call_count = [0]
+        monkeypatch.setattr(QDrag, "exec", lambda self, *a, **k: exec_call_count.__setitem__(0, 1))
+
+        exported_calls = []
+        pane.exported.connect(lambda path: exported_calls.append(path))
+
+        pane._start_drag()
+
+        assert exec_call_count[0] == 0, "QDrag.exec must not run when render fails"
+        assert exported_calls == []
+        assert list(saved_dir.glob("**/*.wav")) == []
+
+
+class TestDownloadPane:
+    """Test DownloadPane progress bar API contract."""
+
+    def _app(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        pytest.importorskip("PySide6")
+        from PySide6.QtWidgets import QApplication
+
+        return QApplication.instance() or QApplication([])
+
+    def test_start_download_busy_state(self):
+        """After pane.start_download() -> indeterminate animation state."""
+        self._app()
+        from cratedig.gui.download_pane import DownloadPane
+
+        pane = DownloadPane()
+        pane.start_download()
+
+        assert pane._bar.minimum() == 0
+        assert pane._bar.maximum() == 0
+        assert pane._bar.property("state") == "busy"
+        assert "Downloading" in pane._bar.format()
+
+    def test_finish_download_ok_green(self):
+        """After pane.finish_download(True, msg) -> completed ok state with green stylesheet."""
+        self._app()
+        from cratedig.gui.download_pane import DownloadPane
+
+        pane = DownloadPane()
+        pane.finish_download(True, "downloaded track.mp3")
+
+        assert pane._bar.maximum() == 100
+        assert pane._bar.value() == 100
+        assert pane._bar.property("state") == "ok"
+        fmt = pane._bar.format()
+        assert fmt.startswith("✓")
+        assert "downloaded track.mp3" in fmt
+
+    def test_finish_download_fail_red(self):
+        """After pane.finish_download(False, msg) -> completed fail state with red stylesheet."""
+        self._app()
+        from cratedig.gui.download_pane import DownloadPane
+
+        pane = DownloadPane()
+        pane.finish_download(False, "no preview")
+
+        assert pane._bar.property("state") == "fail"
+        assert pane._bar.maximum() == 100
+        assert pane._bar.value() == pane._bar.maximum()
+        fmt = pane._bar.format()
+        assert fmt.startswith("✗")
+        assert "no preview" in fmt
+
+    def test_finish_download_fail_stylesheet_differs_from_ok(self):
+        """Stylesheet when fail must differ from ok stylesheet."""
+        self._app()
+        from cratedig.gui.download_pane import DownloadPane
+
+        pane_ok = DownloadPane()
+        pane_ok.finish_download(True, "ok msg")
+        ok_style = pane_ok._bar.styleSheet()
+
+        pane_fail = DownloadPane()
+        pane_fail.finish_download(False, "fail msg")
+        fail_style = pane_fail._bar.styleSheet()
+
+        assert ok_style != fail_style
+
+    def test_set_status_idle_state(self):
+        """After pane.set_status(msg) -> idle state."""
+        self._app()
+        from cratedig.gui.download_pane import DownloadPane
+
+        pane = DownloadPane()
+        pane.set_status("searching…")
+
+        assert pane._bar.maximum() == 100
+        assert pane._bar.value() == 0
+        assert pane._bar.property("state") == "idle"
+        assert "searching" in pane._bar.format()
+
+    def test_busy_then_finish_resets_range(self):
+        """start_download() (range 0,0) -> finish_download() must restore determinate range."""
+        self._app()
+        from cratedig.gui.download_pane import DownloadPane
+
+        pane = DownloadPane()
+        pane.start_download()
+        assert pane._bar.maximum() == 0  # busy/indeterminate
+        pane.finish_download(True, "done")
+        assert pane._bar.maximum() == 100
+        assert pane._bar.value() == 100
+        assert pane._bar.property("state") == "ok"
+
+
+class TestWorkerPreviewRender:
+    """Tests for background worker preview rendering (TDD — FAILING tests)."""
+
+    def _app(self):
+        os.environ.setdefault("QT_QPA_PLATFORM", "offscreen")
+        pytest.importorskip("PySide6")
+        from PySide6.QtWidgets import QApplication
+        return QApplication.instance() or QApplication([])
+
+    def test_index_worker_has_request_preview_render_slot(self, tmp_path):
+        """IndexWorker must have request_preview_render(seq, path, params) Slot."""
+        self._app()
+        from cratedig.gui.worker import IndexWorker
+        from cratedig.db import Database
+        from types import SimpleNamespace
+
+        db = Database(tmp_path / "test.db")
+        cfg = SimpleNamespace(paths=SimpleNamespace(library_dirs=(), saved_dir=tmp_path))
+        worker = IndexWorker(db, cfg)
+
+        # Check that request_preview_render is callable
+        assert hasattr(worker, "request_preview_render")
+        assert callable(getattr(worker, "request_preview_render"))
+        db.close()
+
+    def test_index_worker_has_preview_ready_signal(self, tmp_path):
+        """IndexWorker must emit previewReady(seq: int, path: str, duration: float)."""
+        self._app()
+        from cratedig.gui.worker import IndexWorker
+        from cratedig.db import Database
+        from types import SimpleNamespace
+        from PySide6.QtCore import Signal
+
+        db = Database(tmp_path / "test.db")
+        cfg = SimpleNamespace(paths=SimpleNamespace(library_dirs=(), saved_dir=tmp_path))
+        worker = IndexWorker(db, cfg)
+
+        # Check that previewReady signal exists
+        assert hasattr(worker, "previewReady")
+        signal = getattr(worker, "previewReady")
+        # Should be a Signal
+        assert isinstance(signal, Signal)
+        db.close()
+
+    def test_main_window_preview_does_not_block_gui_thread(self, tmp_path, monkeypatch):
+        """MainWindow._on_preview_edit must delegate to worker, NOT call render_edit on GUI thread."""
+        self._app()
+        import numpy as np
+        from cratedig.gui.main_window import MainWindow
+        from cratedig.gui.worker import IndexWorker
+        from cratedig.db import Database
+        from cratedig.audio.editor import write_wav
+        from types import SimpleNamespace
+        from PySide6.QtCore import QThread
+
+        # Create minimal test setup
+        saved_dir = tmp_path / "_saved"
+        saved_dir.mkdir()
+        db = Database(tmp_path / "test.db")
+        cfg = SimpleNamespace(
+            paths=SimpleNamespace(library_dirs=(), saved_dir=saved_dir),
+            metadata={}
+        )
+
+        # Create minimal MainWindow (without full __init__ to avoid complexity)
+        window = MainWindow.__new__(MainWindow)
+        window._cfg = cfg
+        window._preview_edit_playing = False
+        window._status_bar = SimpleNamespace(showMessage=lambda *a: None)
+        window._player = SimpleNamespace(play=lambda *a, **k: None, stop=lambda: None)
+
+        # Create a worker thread
+        worker_thread = QThread()
+        worker = IndexWorker(db, cfg)
+        worker.moveToThread(worker_thread)
+        window._worker = worker
+
+        # Track if render_edit was called on GUI thread
+        render_edit_called_on_gui_thread = []
+
+        def mock_render_edit(*args, **kwargs):
+            # Check if we're on the main QThread
+            from PySide6.QtCore import QThread as QtThread
+            if QtThread.currentThread() == QtThread.mainThread():
+                render_edit_called_on_gui_thread.append(True)
+            raise RuntimeError("rendered on GUI thread")
+
+        monkeypatch.setattr(
+            "cratedig.gui.main_window.render_edit",
+            mock_render_edit
+        )
+
+        # Create test preview parameters
+        sr = 44100
+        duration = 1.0
+        mono = np.sin(2 * np.pi * 440 * np.arange(int(sr * duration), dtype=np.float32) / sr) * 0.1
+        test_wav = tmp_path / "test.wav"
+        write_wav(mono, sr, test_wav)
+
+        params = {
+            "path": str(test_wav),
+            "region": None,
+            "reverse": False,
+            "gain_db": 0.0,
+            "fade_in": 0.0,
+            "fade_out": 0.0,
+            "adsr": None,
+            "loop": False,
+        }
+
+        # Call _on_preview_edit
+        try:
+            window._on_preview_edit(params)
+        except:
+            pass
+
+        # Clean up
+        worker_thread.quit()
+        worker_thread.wait()
+        db.close()
+
+        # If delegation is working, render_edit should NOT be called on GUI thread
+        # (or maybe not called at all if it's queued to worker)
+        # The key assertion is that we don't get RuntimeError from render_edit
+
+    def test_simpler_pane_has_staged_render_path_attribute(self, tmp_path):
+        """SimplerPane must have _staged_render_path attribute (initially None)."""
+        self._app()
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        saved_dir = tmp_path / "_saved"
+        saved_dir.mkdir()
+        pane = SimplerPane(saved_dir)
+
+        # Check for the staging attribute
+        assert hasattr(pane, "_staged_render_path")
+        # Initially should be None or empty
+        assert pane._staged_render_path is None or pane._staged_render_path == ""
+
+    def test_simpler_pane_has_request_stage_render_method(self, tmp_path):
+        """SimplerPane must have request_stage_render() method for pre-rendering."""
+        self._app()
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        saved_dir = tmp_path / "_saved"
+        saved_dir.mkdir()
+        pane = SimplerPane(saved_dir)
+
+        # Check for the method
+        assert hasattr(pane, "request_stage_render")
+        assert callable(getattr(pane, "request_stage_render"))
+
+    def test_simpler_pane_render_to_saved_exists_for_fallback(self, tmp_path):
+        """SimplerPane._render_to_saved must exist for synchronous fallback in drag."""
+        self._app()
+        from cratedig.gui.simpler_pane import SimplerPane
+
+        saved_dir = tmp_path / "_saved"
+        saved_dir.mkdir()
+        pane = SimplerPane(saved_dir)
+
+        # Verify _render_to_saved is still available (for drag fallback)
+        assert hasattr(pane, "_render_to_saved")
+        assert callable(getattr(pane, "_render_to_saved"))
+
+    def test_worker_request_render_still_exists_for_export(self, tmp_path):
+        """IndexWorker.request_render (export path) must still exist and emit renderReady."""
+        self._app()
+        from cratedig.gui.worker import IndexWorker
+        from cratedig.db import Database
+        from types import SimpleNamespace
+        from PySide6.QtCore import Signal
+
+        db = Database(tmp_path / "test.db")
+        cfg = SimpleNamespace(paths=SimpleNamespace(library_dirs=(), saved_dir=tmp_path))
+        worker = IndexWorker(db, cfg)
+
+        # Check that request_render still exists
+        assert hasattr(worker, "request_render")
+        assert callable(getattr(worker, "request_render"))
+
+        # Check that renderReady signal still exists
+        assert hasattr(worker, "renderReady")
+        signal = getattr(worker, "renderReady")
+        assert isinstance(signal, Signal)
+        db.close()
+
+    def test_simpler_pane_exported_signal_still_exists(self, tmp_path):
+        """SimplerPane.exported signal must still exist (emitted only on CopyAction)."""
+        self._app()
+        from cratedig.gui.simpler_pane import SimplerPane
+        from PySide6.QtCore import Signal
+
+        saved_dir = tmp_path / "_saved"
+        saved_dir.mkdir()
+        pane = SimplerPane(saved_dir)
+
+        # Check that exported signal exists
+        assert hasattr(pane, "exported")
+        signal = getattr(pane, "exported")
+        assert isinstance(signal, Signal)

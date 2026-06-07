@@ -10,7 +10,7 @@ from pathlib import Path
 
 import numpy as np
 
-from .models import MetadataCacheRecord, Sample
+from .models import Crate, MetadataCacheRecord, Sample
 
 SCHEMA_VERSION = "1"
 
@@ -37,6 +37,7 @@ class Database:
         with self.lock:
             self.conn.executescript(schema)
             self._ensure_sample_columns()
+            self._ensure_sample_tag_columns()
             self.conn.execute(
                 "INSERT INTO meta(key, value) VALUES('schema_version', ?) "
                 "ON CONFLICT(key) DO UPDATE SET value=excluded.value",
@@ -53,6 +54,20 @@ class Database:
             self.conn.execute("ALTER TABLE samples ADD COLUMN waveform_preview TEXT")
         if "instrument_class" not in columns:
             self.conn.execute("ALTER TABLE samples ADD COLUMN instrument_class TEXT")
+        if "classify_attempted" not in columns:
+            self.conn.execute(
+                "ALTER TABLE samples ADD COLUMN classify_attempted INTEGER NOT NULL DEFAULT 0"
+            )
+
+    def _ensure_sample_tag_columns(self) -> None:
+        columns = {
+            row["name"]
+            for row in self.conn.execute("PRAGMA table_info(sample_tags)").fetchall()
+        }
+        if "source" not in columns:
+            self.conn.execute(
+                "ALTER TABLE sample_tags ADD COLUMN source TEXT NOT NULL DEFAULT 'manual'"
+            )
 
     def close(self) -> None:
         with self.lock:
@@ -91,6 +106,7 @@ class Database:
                     feature_vector=COALESCE(excluded.feature_vector, samples.feature_vector),
                     feature_dim=COALESCE(excluded.feature_dim, samples.feature_dim),
                     analyzed_at=COALESCE(excluded.analyzed_at, samples.analyzed_at),
+                    classify_attempted=COALESCE(samples.classify_attempted, 0),
                     indexed_at=excluded.indexed_at
                 """,
                 {
@@ -213,13 +229,13 @@ class Database:
             return self.conn.execute("SELECT 1 FROM samples WHERE path=?", (path,)).fetchone() is not None
 
     # --- tags -----------------------------------------------------------
-    def add_tag(self, sample_id: int, name: str) -> None:
+    def add_tag(self, sample_id: int, name: str, source: str = "manual") -> None:
         with self.lock:
             self.conn.execute("INSERT OR IGNORE INTO tags(name) VALUES(?)", (name,))
             self.conn.execute(
-                "INSERT OR IGNORE INTO sample_tags(sample_id, tag_id) "
-                "SELECT ?, id FROM tags WHERE name=?",
-                (sample_id, name),
+                "INSERT OR IGNORE INTO sample_tags(sample_id, tag_id, source) "
+                "SELECT ?, id, ? FROM tags WHERE name=?",
+                (sample_id, source, name),
             )
             self.conn.commit()
 
@@ -247,11 +263,32 @@ class Database:
         with self.lock:
             for name in desired:
                 self.conn.execute("INSERT OR IGNORE INTO tags(name) VALUES(?)", (name,))
-            self.conn.execute("DELETE FROM sample_tags WHERE sample_id=?", (sample_id,))
+            self.conn.execute(
+                "DELETE FROM sample_tags WHERE sample_id=? AND source='manual'",
+                (sample_id,),
+            )
             if desired:
                 self.conn.executemany(
-                    "INSERT OR IGNORE INTO sample_tags(sample_id, tag_id) "
-                    "SELECT ?, id FROM tags WHERE name=?",
+                    "INSERT OR IGNORE INTO sample_tags(sample_id, tag_id, source) "
+                    "SELECT ?, id, 'manual' FROM tags WHERE name=?",
+                    [(sample_id, name) for name in desired],
+                )
+            self.conn.commit()
+
+    def set_auto_tags_for(self, sample_id: int, tags: list[str]) -> None:
+        """Replace only auto-derived tags; preserve manual tag associations."""
+        desired = sorted(set(tags))
+        with self.lock:
+            for name in desired:
+                self.conn.execute("INSERT OR IGNORE INTO tags(name) VALUES(?)", (name,))
+            self.conn.execute(
+                "DELETE FROM sample_tags WHERE sample_id=? AND source='auto'",
+                (sample_id,),
+            )
+            if desired:
+                self.conn.executemany(
+                    "INSERT OR IGNORE INTO sample_tags(sample_id, tag_id, source) "
+                    "SELECT ?, id, 'auto' FROM tags WHERE name=?",
                     [(sample_id, name) for name in desired],
                 )
             self.conn.commit()
@@ -264,6 +301,7 @@ class Database:
     def delete_sample(self, sample_id: int) -> None:
         with self.lock:
             self.conn.execute("DELETE FROM samples WHERE id=?", (sample_id,))
+            self.conn.execute("DELETE FROM crate_samples WHERE sample_id=?", (sample_id,))
             self.conn.execute(
                 "DELETE FROM favorites WHERE kind='sample' AND ref=?",
                 (str(sample_id),),
@@ -285,6 +323,81 @@ class Database:
                 (category, instrument_class, sample_id),
             )
             self.conn.commit()
+
+    # --- crates ---------------------------------------------------------
+    def create_crate(self, name: str) -> int:
+        clean = name.strip()
+        if not clean:
+            raise ValueError("crate name cannot be empty")
+        with self.lock:
+            self.conn.execute(
+                "INSERT OR IGNORE INTO crates(name, created_at) VALUES(?, ?)",
+                (clean, _now()),
+            )
+            self.conn.commit()
+            row = self.conn.execute("SELECT id FROM crates WHERE name=?", (clean,)).fetchone()
+            return int(row["id"])
+
+    def rename_crate(self, crate_id: int, name: str) -> None:
+        clean = name.strip()
+        if not clean:
+            raise ValueError("crate name cannot be empty")
+        with self.lock:
+            self.conn.execute("UPDATE crates SET name=? WHERE id=?", (clean, crate_id))
+            self.conn.commit()
+
+    def delete_crate(self, crate_id: int) -> None:
+        with self.lock:
+            self.conn.execute("DELETE FROM crates WHERE id=?", (crate_id,))
+            self.conn.commit()
+
+    def list_crates(self) -> list[Crate]:
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT id, name, created_at FROM crates ORDER BY name COLLATE NOCASE, id"
+            ).fetchall()
+        return [Crate.from_row(row) for row in rows]
+
+    def add_to_crate(self, crate_id: int, sample_id: int) -> None:
+        with self.lock:
+            self.conn.execute(
+                """
+                INSERT OR IGNORE INTO crate_samples(crate_id, sample_id, position, added_at)
+                VALUES(
+                    ?,
+                    ?,
+                    COALESCE(
+                        (SELECT MAX(position) + 1 FROM crate_samples WHERE crate_id=?),
+                        0
+                    ),
+                    ?
+                )
+                """,
+                (crate_id, sample_id, crate_id, _now()),
+            )
+            self.conn.commit()
+
+    def remove_from_crate(self, crate_id: int, sample_id: int) -> None:
+        with self.lock:
+            self.conn.execute(
+                "DELETE FROM crate_samples WHERE crate_id=? AND sample_id=?",
+                (crate_id, sample_id),
+            )
+            self.conn.commit()
+
+    def crate_samples(self, crate_id: int) -> list[Sample]:
+        with self.lock:
+            rows = self.conn.execute(
+                """
+                SELECT s.*
+                FROM crate_samples cs
+                JOIN samples s ON s.id=cs.sample_id
+                WHERE cs.crate_id=?
+                ORDER BY cs.position, cs.added_at, cs.sample_id
+                """,
+                (crate_id,),
+            ).fetchall()
+        return [Sample.from_row(row) for row in rows]
 
     # --- external metadata cache -----------------------------------------
     def get_metadata_cache(self, provider: str, query_norm: str) -> MetadataCacheRecord | None:
@@ -407,6 +520,17 @@ class Database:
                 "(SELECT path FROM recent_folders ORDER BY seq DESC LIMIT 20)"
             )
             self.conn.commit()
+
+    def samples_basename_index(self) -> dict[str, list]:
+        """Return a dict mapping lowercased basename → list of Sample objects."""
+        with self.lock:
+            rows = self.conn.execute("SELECT * FROM samples").fetchall()
+        index: dict[str, list] = {}
+        for row in rows:
+            sample = Sample.from_row(row)
+            key = Path(sample.path).name.lower()
+            index.setdefault(key, []).append(sample)
+        return index
 
     def list_recent_folders(self, limit: int = 20) -> list[str]:
         with self.lock:

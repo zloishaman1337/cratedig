@@ -1,14 +1,16 @@
 # cratedig — Architecture
 
-A local, TUI-first fork of Sononym: index a sample library, search by descriptors
-(BPM / key / mood / tags), find acoustically similar samples, and download new
-audio from multiple sources into the same library.
+A local desktop-first fork of Sononym: index a sample library, search by
+descriptors (BPM / key / mood / tags), find acoustically similar samples, organize
+crates, inspect Ableton `.als` projects, edit/export sample regions, and download
+new audio from multiple sources into the same library. The Textual TUI remains a
+supported secondary surface. The Web UI has been removed.
 
 ## Layers
 
 ```
                  ┌───────────────────────────┐
-                 │  tui/  (Textual)           │  presentation only
+                 │  gui/ (PySide6) + tui/     │  presentation only
                  └─────────────┬─────────────┘
                                │ calls
                  ┌─────────────┴─────────────┐
@@ -29,7 +31,7 @@ audio from multiple sources into the same library.
               │ sqlite    │            └───────────┘
               └─────┬─────┘
    ┌────────────────┴───────────────┐
-   │ sources/ (downloaders)         │   metadata/ (enrichment)
+   │ sources/ (downloaders)         │   metadata/ (ranking/cache)
    │ youtube · yandex · freesound   │   musicbrainz · discogs
    │ · archive  + manager(fallback) │
    └────────────────────────────────┘
@@ -64,7 +66,7 @@ via `@register`. Every attempt is logged to the `downloads` table.
 | backend    | uses              | notes |
 |------------|-------------------|-------|
 | youtube    | yt-dlp + ffmpeg   | also Bandcamp/SoundCloud; `ytsearch1:` for text |
-| yandex     | bundled yamdl.exe | confirm CLI flags in `yandex.py._build_args` |
+| yandex     | yandex-music      | mp3 direct via Python library; no yamdl.exe |
 | freesound  | FreeSound APIv2   | token-only → HQ mp3 previews (sampling-grade) |
 | archive    | internetarchive   | public items, no key |
 
@@ -73,14 +75,16 @@ the proper `source`.
 
 ## Metadata enrichment
 
-`metadata/` providers (MusicBrainz, Discogs) implement `MetadataProvider` and write
-`metadata` rows keyed `(sample_id, provider)`. Not wired into the TUI yet (next
-session).
+`metadata/` providers (MusicBrainz, Discogs) implement `MetadataProvider` and are
+used by track search ranking through an incremental `metadata_cache` table. Track
+search gathers Yandex + YouTube candidates, enriches `SearchHit.extra`, and keeps
+live lookup bounded so broad searches stay responsive.
 
 ## Database
 
 SQLite (WAL), schema in `cratedig/db/schema.sql`, applied idempotently on startup.
-Tables: `samples`, `tags`, `sample_tags`, `downloads`, `metadata`, `meta`.
+Core tables include `samples`, `tags`, `sample_tags`, `downloads`, `metadata`,
+`metadata_cache`, `crates`, `crate_samples`, and `meta`.
 
 ## Key decisions
 
@@ -95,19 +99,22 @@ Tables: `samples`, `tags`, `sample_tags`, `downloads`, `metadata`, `meta`.
 - Auto-classification (drum/bass/synth/…) → `samples.category`. **DONE** (filename + audio fallback).
 - Duplicate-detection UI over `file_hash`.
 - In-TUI audio playback / waveform. **DONE** (TUI + GUI).
-- Download screen + metadata enrichment wired into TUI. **PARTIAL** (download done; metadata still unwired — see Roadmap v2 §6).
+- Download screen + metadata enrichment wired into TUI/GUI. **PARTIAL UX** (core
+  ranking/cache wiring exists; GUI progress/feedback polish is in the
+  pre-redesign roadmap).
 - hnswlib ANN index for large libraries.
-- **Roadmap v2 epics (planned, this planning session): see section below.**
+- **Roadmap v2 epics are implemented in the current worktree; see COMPACT.md for
+  exact verification status and the pre-redesign roadmap below for what comes
+  next.**
 
 ---
 
-## GUI skeleton (PySide6)
+## Historical GUI skeleton (PySide6)
 
-This section is the authoritative gate for the desktop GUI. It is a **skeleton**:
-browse a folder tree, list samples in a table, draw a waveform, and play/stop a
-selection, with background scan/analyze. No new feature surface beyond that. It
-adds **no production code** by itself — it is the contract the tester and developer
-build against.
+This section records the original desktop GUI implementation contract. It is
+historical context: the current GUI has since grown beyond this skeleton with
+favorites, crates, similarity, downloads, ALS Explorer, and Simpler. For next work,
+prefer COMPACT.md plus the pre-redesign roadmap below over this early scope fence.
 
 ### Scope fence (what this skeleton is, and is not)
 
@@ -129,8 +136,8 @@ Explicitly **out of scope** for the skeleton (do not build, do not stub UI for):
 - Favorites mutation (add/remove) — the branch is read-only display only.
 - Search/query UI.
 
-`web/` is removed in a **separate** change; this section does not depend on it and
-must not reference it.
+`web/` has been removed; this historical section does not depend on it and should
+not be used to reintroduce it.
 
 ### Assumptions
 
@@ -159,7 +166,7 @@ must not reference it.
 | `player.py`        | Thin wrapper around `audio.playback.AudioPlayer` (play/stop/is_playing).         | yes (Qt-side caller) |
 | `tree_pane.py`     | `TreePane(QTreeWidget)`: renders `tree_rows`, emits folder-selected.             | yes |
 | `sample_table.py`  | `SampleTable(QTableView/QTableWidget)`: lists a folder's samples, emits selection. | yes |
-| `waveform_pane.py` | `WaveformPane(QWidget)`: `paintEvent` draws min/max peaks from `compute_peaks`.   | yes |
+| `simpler_pane.py`  | `SimplerPane(QWidget)`: combined waveform preview + editor; replaced `WaveformPane` (removed). | yes |
 | `main_window.py`   | `MainWindow(QMainWindow)`: left sidebar (`QButtonGroup`: Samples/Ableton) + `QStackedWidget` (index 0 = samples splitter, index 1 = `AlsExplorerPanel`); wires panes ↔ worker ↔ player; owns the layout. | yes |
 | `als_explorer.py`  | `AlsExplorerPanel(QWidget)`: embedded ALS Explorer page inside MainWindow (see below). | yes |
 
@@ -188,7 +195,7 @@ in both modes. RU/EN language toggle buttons are native checkable `QPushButton`s
 | module        | responsibility |
 |---------------|----------------|
 | `__init__.py` | package marker |
-| `parser.py`   | Pure stdlib parser (gzip + xml.etree). No external deps. Public API: `parse_als(path) -> dict` and `scan_vst_plugins(vst2_names, vst3_names) -> dict` (latter unused by GUI — dead app code). |
+| `parser.py`   | Pure stdlib parser (gzip + xml.etree). No external deps. Public API: `parse_als(path) -> dict`. (`scan_vst_plugins`, `_vst_dirs`, `_collect_stems` were dead app code and have been removed; `_match_plugin` is internal and still exercised by tests.) |
 
 `parse_als` returns:
 ```
@@ -251,7 +258,7 @@ ffmpeg→soundfile fallback. The GUI worker calls `decode_waveform_data`, and th
 **pure** `compute_peaks` reduces that array to the exact shape the widget draws.
 
 No schema change. Decode runs on the worker thread; drawing happens in
-`WaveformPane.paintEvent`.
+`SimplerPane` (`gui/simpler_pane.py`).
 
 **Pure-function boundary — `gui/logic.py::compute_peaks`:**
 
@@ -433,7 +440,7 @@ sequenceDiagram
     W->>FF: decode_waveform_data(path)
     W->>W: compute_peaks(mono, width)   (pure)
     W-->>MW: peaksReady(id, peaks)
-    MW->>MW: WaveformPane.update() -> paintEvent
+    MW->>MW: SimplerPane.update() -> paintEvent
 
     User->>MW: Play
     MW->>FF: AudioPlayer.play(path)   (non-blocking)
@@ -710,3 +717,113 @@ region bounds) on synthetic buffers.
 | `paths.saved_dir` config + `source='edit'` rows | §4 |
 
 No destructive migrations; existing rows unaffected.
+
+---
+
+# Pre-redesign stabilization roadmap — locked 2026-06-06
+
+Do not start the visual redesign until this roadmap is either completed or
+explicitly re-scoped. The goal is to make the current desktop app functionally
+solid first, then redesign around proven workflows.
+
+## 1 — Cleanup and documentation **[DONE]**
+
+- **DONE** — `cratedig/gui/waveform_pane.py` removed; `SimplerPane` (`gui/simpler_pane.py`)
+  is the sole waveform/editor surface used by `MainWindow` and tests.
+- **DONE** — Standalone `als_explorer/` folder removed (was untracked redundant code;
+  all logic lives in `cratedig/als/` + `cratedig/gui/als_explorer.py`).
+- **DONE** — Dead VST scan helpers removed from `cratedig/als/parser.py`
+  (`scan_vst_plugins`, `_vst_dirs`, `_collect_stems`, unused `import sys`);
+  `_match_plugin` retained (still exercised by tests).
+- **DONE** — README confirmed aligned: standalone desktop GUI is primary; Web UI is removed.
+
+Acceptance: docs mention no removed web-panel workflow; orphan/legacy code has an
+explicit decision; tests stay green.
+
+## 2 — Drag-to-DAW reliability **[MOSTLY DONE]**
+
+- **DONE** — Drag of original sample rows from the table.
+- **DONE** — Drag of rendered Simpler regions; pre-render via `request_stage_render`/`stageReady`; orphan unlink on cancel.
+- REMAINING: manual real-DAW end-to-end verification with spaces/non-ASCII paths.
+
+Acceptance: dragging table rows, crates, and Simpler rendered regions drops real
+filesystem files into a DAW; generated drag files appear under Saved.
+
+## 3 — Download and metadata UX **[MOSTLY DONE]**
+
+- **DONE** — `set_progress(pct|None)` float→determinate/None→indeterminate; colored completion states.
+- **DONE** — `show_notification(text)` corner notification on download finish.
+- **DONE** — `set_backend(source)` + `_backend_label` + `backend_badge(source)` per-backend visual distinction.
+- **DONE** — `_refresh_meta_btn` + `refresh_metadata_requested` signal; `worker.request_refresh_metadata` emits `failed(...)` on missing backend (no false success).
+- **DONE** — `<TRACK> - <ARTIST>` naming via `safe_filename`.
+- REMAINING: real metadata re-enrich backend (DownloadManager.refresh_metadata_cache missing); progress % real only for yt-dlp (others indeterminate).
+
+Acceptance: a user can see which backend is being used, whether metadata came from
+cache/live lookup, and when a downloaded file is indexed.
+
+## 4 — Simpler editing intelligence **[DONE]**
+
+- **DONE** — Transient detector + live markers (cyan lines) + Sensitivity knob.
+- **DONE** — Normalize / Trim silence / Snap to zero crossings / Slice buttons.
+- **DONE** — `set_mono` auto-recomputes transients; Slice cycles `auto_slice()` regions.
+- **DONE** — `editor._fade_envelope` overlap fixed: `fo=min(n-fi,...)`.
+- **DONE** — Preview + drag now go via worker (`request_preview_render`/`request_stage_render`).
+
+Acceptance: transient threshold visibly changes markers; handles snap only when
+the toggle is enabled; normalize/trim/slice/export preserve valid WAV output and
+Saved indexing.
+
+## 5 — Duplicates resolver **[DONE]**
+
+- **DONE** — `DuplicatesDialog` modeless; per-group radio keep-selection (default `pick_best`); Reveal; Resolve/delete with protected-edit confirmation.
+- REMAINING: dialog does not live-refresh after deletes (re-open "D" action to re-query).
+
+Acceptance: regular library duplicates can be resolved safely; Saved/generated
+files require a separate confirmation; table/tree refresh after actions.
+
+## 6 — ALS Explorer library matching **[MOSTLY DONE]**
+
+- **DONE** — `match_als_samples(names, index)` → `{found, candidates, unresolved}`; exact basename→found, stem→candidates.
+- **DONE** — `db.samples_basename_index()` lock-guarded; worker `request_als_match`/`alsMatchReady`.
+- **DONE** — `AlsExplorerPanel.set_match_result`/`matchRequested`/`_btn_match`; Library Match tab added after match.
+- REMAINING: reveal-in-explorer and crate-from-match not wired.
+
+Acceptance: loading an ALS project can surface missing samples and likely local
+matches without leaving the app.
+
+## 7 — A/B audition workflow **[MOSTLY DONE]**
+
+- **DONE** — `ABState(slot_a, slot_b, current)` frozen dataclass with set_a/set_b/toggle/active_id in `gui/logic.py`.
+- **DONE** — `MainWindow._ab_state`, `set_ab_slot_a/b`, `toggle_ab_slot`, `_ab_toggle_action` shortcut 'X'.
+- **DONE** — `player.apply_loudness_leveling` flag; `level_gain_db(ref,target)` in `audio.playback`.
+- **DONE** — Mark fav / add to crate during playback.
+- REMAINING: loudness leveling inert — gain computed but not applied (AudioPlayer.play has no gain arg).
+
+Acceptance: the user can compare several samples rapidly and curate favorites or
+crates without breaking audition flow.
+
+## 8 — Expanded character auto-tags **[DONE]**
+
+- **DONE** — 27 DSP-derived tags; tape/vinyl deferred-ML.
+- **DONE** — Auto tags never overwrite manual tags (`sample_tags.source` guard).
+
+Acceptance: auto-tags never overwrite manual tags; re-tagging is predictable; the
+heuristics do not flood samples with low-signal labels.
+
+## 9 — Library health dashboard **[DONE]**
+
+- **DONE** — `HealthPanel` QWidget page at QStackedWidget index 2; Refresh + Remove Missing buttons.
+- **DONE** — Worker slots `request_health`/`request_remove_missing`; `healthReady` signal.
+- **DONE** — Auto-refresh on sidebar open.
+
+Actions should include fix/rescan, analyze, retag, and refresh metadata.
+
+Acceptance: health problems are visible in one place and the common fixes are one
+click away.
+
+## Redesign gate
+
+Only after the stabilization roadmap should the visual redesign begin. The target
+style is a dense producer-tool layout with toolbar icons, polished
+active/hover/disabled states, more readable tables, unified button styling across
+Simpler/Download/ALS, a strong dark theme, and less visual noise.

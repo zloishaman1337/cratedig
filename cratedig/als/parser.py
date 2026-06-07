@@ -2,7 +2,6 @@ import gzip
 import math
 import os
 import struct
-import sys
 import xml.etree.ElementTree as ET
 
 # ── Live built-in device tag → display name ──────────────────────────────────
@@ -831,58 +830,6 @@ def parse_als(path: str) -> dict:
     }
 
 
-# ── VST scanner ───────────────────────────────────────────────────────────────
-
-def _vst_dirs() -> dict:
-    home = os.path.expanduser("~")
-    if sys.platform == "darwin":
-        return {
-            "vst2": [
-                "/Library/Audio/Plug-Ins/VST",
-                os.path.join(home, "Library/Audio/Plug-Ins/VST"),
-            ],
-            "vst3": [
-                "/Library/Audio/Plug-Ins/VST3",
-                os.path.join(home, "Library/Audio/Plug-Ins/VST3"),
-            ],
-        }
-    else:  # Windows
-        pf   = os.environ.get("ProgramFiles",      r"C:\Program Files")
-        pf86 = os.environ.get("ProgramFiles(x86)", r"C:\Program Files (x86)")
-        cf   = os.environ.get("CommonProgramFiles", r"C:\Program Files\Common Files")
-        return {
-            "vst2": [
-                os.path.join(pf,   "Steinberg", "VSTPlugins"),
-                os.path.join(pf86, "Steinberg", "VSTPlugins"),
-                os.path.join(pf,   "VSTPlugins"),
-                os.path.join(pf86, "VSTPlugins"),
-                os.path.join(cf,   "VST2"),
-            ],
-            "vst3": [
-                os.path.join(cf, "VST3"),
-            ],
-        }
-
-
-def _collect_stems(dirs: list, bundle_exts: tuple) -> set:
-    stems = set()
-    for d in dirs:
-        if not os.path.isdir(d):
-            continue
-        for root, subdirs, files in os.walk(d):
-            for entry in list(subdirs) + files:
-                low = entry.lower()
-                for ext in bundle_exts:
-                    if low.endswith(ext):
-                        stems.add(low[: -len(ext)].strip())
-                        break
-            subdirs[:] = [
-                s for s in subdirs
-                if not any(s.lower().endswith(e) for e in bundle_exts)
-            ]
-    return stems
-
-
 def _match_plugin(name: str, stems: set) -> bool:
     n = name.lower().strip()
     if n in stems:
@@ -891,16 +838,3 @@ def _match_plugin(name: str, stems: set) -> bool:
         if n in s or s in n:
             return True
     return False
-
-
-def scan_vst_plugins(vst2_names: list, vst3_names: list) -> dict:
-    """Возвращает {("vst2"|"vst3", name): bool}."""
-    dirs = _vst_dirs()
-    vst2_stems = _collect_stems(dirs["vst2"], (".dll", ".vst"))
-    vst3_stems = _collect_stems(dirs["vst3"], (".vst3",))
-    result = {}
-    for n in vst2_names:
-        result[("vst2", n)] = _match_plugin(n, vst2_stems)
-    for n in vst3_names:
-        result[("vst3", n)] = _match_plugin(n, vst3_stems)
-    return result

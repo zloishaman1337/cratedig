@@ -1,6 +1,10 @@
+import subprocess
+
 import numpy as np
 
-from cratedig.audio.playback import AudioPlayer, WaveformData, render_waveform, render_waveform_panel
+from cratedig.audio.playback import (
+    AudioPlayer, WaveformData, decode_waveform_mono_samples, render_waveform, render_waveform_panel,
+)
 
 
 def test_render_waveform_scales_peaks_to_width():
@@ -79,3 +83,22 @@ def test_audio_player_play_builds_seek_loop_command(monkeypatch):
             "kick.wav",
         ]
     ]
+
+
+def test_decode_waveform_mono_samples_uses_ffmpeg_pcm(monkeypatch):
+    pcm = np.array([0.0, 0.25, -0.5], dtype=np.float32).tobytes()
+    calls = []
+
+    def fake_run(cmd, **kwargs):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, 0, stdout=pcm, stderr=b"")
+
+    monkeypatch.setattr("shutil.which", lambda name: "ffmpeg.exe" if name == "ffmpeg" else None)
+    monkeypatch.setattr("subprocess.run", fake_run)
+
+    out = decode_waveform_mono_samples("kick.wav", sample_rate=22050)
+
+    assert out.dtype == np.float32
+    assert out.tolist() == [0.0, 0.25, -0.5]
+    assert "-ac" in calls[0] and "1" in calls[0]
+    assert "-ar" in calls[0] and "22050" in calls[0]

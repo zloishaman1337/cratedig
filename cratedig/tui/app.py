@@ -614,7 +614,8 @@ class CratedigApp(App):
 
         try:
             n = indexer.analyze_pending(self.db, self.cfg, progress=progress)
-            msg = f"analyzed {n} files"
+            tagged = indexer.tag_pending(self.db, self.cfg, progress=progress)
+            msg = f"analyzed {n} files · tagged {tagged}"
         except RuntimeError as e:
             msg = str(e)
         except Exception as e:

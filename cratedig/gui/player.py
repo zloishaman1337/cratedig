@@ -12,9 +12,14 @@ class Player:
 
     def __init__(self) -> None:
         self._player = AudioPlayer()
+        self.apply_loudness_leveling: bool = False
 
-    def play(self, path: str | Path) -> None:
-        self._player.play(path)
+    def set_loudness_leveling(self, enable: bool) -> None:
+        """Enable or disable loudness leveling on A/B slot switches."""
+        self.apply_loudness_leveling = enable
+
+    def play(self, path: str | Path, *, loop: bool = False) -> None:
+        self._player.play(path, loop=loop)
 
     def stop(self) -> None:
         self._player.stop()

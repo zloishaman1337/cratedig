@@ -16,6 +16,7 @@ class Paths:
     db: Path
     download_dir: Path
     library_dirs: tuple[Path, ...]
+    saved_dir: Path
 
 
 @dataclass(frozen=True)
@@ -59,6 +60,7 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         db=_resolve(root, p.get("db", "data/cratedig.db")),
         download_dir=_resolve(root, p.get("download_dir", "data/downloads")),
         library_dirs=tuple(_resolve(root, d) for d in p.get("library_dirs", [])),
+        saved_dir=_resolve(root, p.get("saved_dir", "data/_saved")),
     )
 
     a = raw.get("audio", {})
