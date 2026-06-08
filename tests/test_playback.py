@@ -3,7 +3,13 @@ import subprocess
 import numpy as np
 
 from cratedig.audio.playback import (
-    AudioPlayer, WaveformData, decode_waveform_mono_samples, render_waveform, render_waveform_panel,
+    AudioPlayer,
+    WaveformData,
+    decode_waveform_mono_samples,
+    load_mono_preview_cache,
+    render_waveform,
+    render_waveform_panel,
+    save_mono_preview_cache,
 )
 
 
@@ -102,3 +108,17 @@ def test_decode_waveform_mono_samples_uses_ffmpeg_pcm(monkeypatch):
     assert out.tolist() == [0.0, 0.25, -0.5]
     assert "-ac" in calls[0] and "1" in calls[0]
     assert "-ar" in calls[0] and "22050" in calls[0]
+
+
+def test_mono_preview_cache_roundtrip(tmp_path):
+    samples = np.array([0.0, 0.25, -0.5], dtype=np.float32)
+
+    save_mono_preview_cache(samples, tmp_path, "abc123", sample_rate=44100)
+    out = load_mono_preview_cache(tmp_path, "abc123", sample_rate=44100)
+
+    assert out.dtype == np.float32
+    assert out.tolist() == [0.0, 0.25, -0.5]
+
+
+def test_mono_preview_cache_missing_returns_none(tmp_path):
+    assert load_mono_preview_cache(tmp_path, "missing") is None

@@ -126,6 +126,20 @@ def test_write_and_render_roundtrip(tmp_path):
     assert edited.shape[0] == 100
 
 
+def test_render_edit_region_matches_apply_edit(tmp_path):
+    pytest.importorskip("soundfile")
+    buf = np.linspace(-1.0, 1.0, SR * 2, dtype=np.float32)
+    dest = tmp_path / "source.wav"
+    write_wav(buf, SR, dest)
+
+    edited, sr = render_edit(dest, region=(0.25, 0.75), gain_db=3.0, fade_in=0.01)
+    expected = apply_edit(buf, SR, region=(0.25, 0.75), gain_db=3.0, fade_in=0.01)
+
+    assert sr == SR
+    assert edited.shape == expected.shape
+    assert np.allclose(edited, expected, atol=1e-4)
+
+
 def test_write_creates_parent(tmp_path):
     pytest.importorskip("soundfile")
     dest = tmp_path / "nested" / "deep" / "out.wav"
@@ -197,6 +211,101 @@ def test_detect_transients_returns_ascending_times():
     onsets = detect_transients(sig, sr, sensitivity=0.3)
 
     assert onsets == sorted(onsets)
+
+
+# ---------------------------------------------------------------------------
+# BUG 1: detect_transients flooding on long files
+# ---------------------------------------------------------------------------
+
+class TestTransientLongFile:
+    """Tests for detect_transients robustness on long signals with sparse transients."""
+
+    def test_short_file_regression_four_impulses(self):
+        """Regression test: small file (1.0s) with 4 impulses still detects correctly.
+
+        Build a 1.0s signal at sr=44100 with all zeros except 4 short impulse
+        bursts (5ms of 0.9 amplitude noise) at t~0.1, 0.35, 0.6, 0.85s.
+        Expect between 3 and 6 onsets, each within ±25ms of expected times.
+        """
+        sr = 44100
+        sig = np.zeros(sr, dtype=np.float32)
+        rng = np.random.default_rng(seed=42)
+
+        # Add 4 impulse bursts: 5ms of 0.9 amplitude noise at specific times
+        impulse_times = [0.1, 0.35, 0.6, 0.85]
+        burst_samples = int(0.005 * sr)  # 5ms burst
+        for t in impulse_times:
+            start_idx = int(t * sr)
+            end_idx = min(start_idx + burst_samples, sr)
+            if start_idx < sr:
+                sig[start_idx:end_idx] = rng.normal(0, 0.9, end_idx - start_idx).astype(np.float32)
+
+        onsets = detect_transients(sig, sr, sensitivity=0.5)
+
+        # Should find between 3 and 6 onsets
+        assert 3 <= len(onsets) <= 6, f"Expected 3-6 onsets on short file, got {len(onsets)}"
+
+        # Each expected time should match some returned onset within ±25ms
+        for expected_t in impulse_times:
+            matched = any(abs(onset - expected_t) <= 0.025 for onset in onsets)
+            assert matched, f"No onset found within ±25ms of t={expected_t}; onsets={onsets}"
+
+    def test_long_file_flooding_caps_onset_count(self):
+        """BUG 1: long file (20s) with broadband noise should not flood with false onsets.
+
+        Build a 20.0s signal at sr=44100: 4 clear impulses at t~0.1, 0.4, 0.8, 1.2s
+        with broadband noise throughout (amplitude 0.1). The global-threshold impl
+        floods with ~300+ false onsets because it uses a single threshold over the
+        entire novelty curve, which doesn't adapt to noise variance across the signal.
+
+        After the fix (adaptive/local threshold or onset count cap), expect len(onsets)
+        <= 8 AND each of the 4 expected times is matched within ±50ms. This test should
+        FAIL now (too many detections: ~300+) and PASS after the fix (~4 onsets).
+        """
+        sr = 44100
+        total_sec = 20.0
+        sig = np.zeros(int(sr * total_sec), dtype=np.float32)
+        rng = np.random.default_rng(seed=123)
+
+        # Add 4 clear single-sample impulses
+        impulse_times = [0.1, 0.4, 0.8, 1.2]
+        for t in impulse_times:
+            idx = int(t * sr)
+            if idx < len(sig):
+                sig[idx] = 0.8
+
+        # Add broadband noise (0.1 amplitude) throughout the entire signal.
+        # This causes the global threshold impl to emit ~300+ false onsets because
+        # the novelty curve is high everywhere, and a single global threshold
+        # doesn't distinguish signal transients from noise transients.
+        noise = rng.normal(0, 0.1, len(sig)).astype(np.float32)
+        sig = sig + noise
+
+        onsets = detect_transients(sig, sr, sensitivity=0.5)
+
+        # Main assertion: onset count should be capped (not flooded)
+        # This will FAIL with the current global-threshold impl (expects ~300+ onsets)
+        # and PASS after the fix (~4 onsets)
+        assert len(onsets) <= 8, \
+            f"BUG: long file flooded with {len(onsets)} onsets (expected <=8); " \
+            f"global threshold not adaptive to noise variance"
+
+        # Each of the 4 expected impulses should still be detected
+        for expected_t in impulse_times:
+            matched = any(abs(onset - expected_t) <= 0.050 for onset in onsets)
+            assert matched, f"Expected onset at t={expected_t} not found; onsets={onsets}"
+
+    def test_silence_flat_signal_returns_empty(self):
+        """Edge case: silence or flat signal returns empty list (parity with existing guard)."""
+        sr = 44100
+
+        # All zeros
+        sig_zero = np.zeros(sr, dtype=np.float32)
+        assert detect_transients(sig_zero, sr) == []
+
+        # Constant DC
+        sig_dc = np.full(sr, 0.001, dtype=np.float32)
+        assert detect_transients(sig_dc, sr) == []
 
 
 # ---------------------------------------------------------------------------

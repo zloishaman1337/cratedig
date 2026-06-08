@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 import math
+import hashlib
 import shutil
 import subprocess
 from pathlib import Path
@@ -136,6 +137,74 @@ def decode_waveform_mono_samples(
         raise RuntimeError(err or "ffmpeg failed to decode audio")
     samples = np.frombuffer(proc.stdout, dtype=np.float32)
     return np.ascontiguousarray(samples[np.isfinite(samples)], dtype=np.float32)
+
+
+def mono_preview_cache_path(
+    cache_dir: str | Path,
+    file_hash: str,
+    *,
+    sample_rate: int = 44100,
+) -> Path:
+    """Return the cache path for a decoded mono preview."""
+    return Path(cache_dir) / f"mono_{sample_rate}_{file_hash}.npy"
+
+
+def load_mono_preview_cache(
+    cache_dir: str | Path,
+    file_hash: str | None,
+    *,
+    sample_rate: int = 44100,
+) -> np.ndarray | None:
+    """Load a cached mono preview, returning None when it is absent/invalid."""
+    if not file_hash:
+        return None
+    path = mono_preview_cache_path(cache_dir, file_hash, sample_rate=sample_rate)
+    try:
+        data = np.load(path, allow_pickle=False)
+    except Exception:
+        return None
+    if data.dtype != np.float32:
+        data = data.astype(np.float32)
+    return np.ascontiguousarray(data[np.isfinite(data)], dtype=np.float32)
+
+
+def save_mono_preview_cache(
+    samples: np.ndarray,
+    cache_dir: str | Path,
+    file_hash: str,
+    *,
+    sample_rate: int = 44100,
+) -> Path:
+    """Persist decoded mono preview samples to the cache."""
+    dest = mono_preview_cache_path(cache_dir, file_hash, sample_rate=sample_rate)
+    dest.parent.mkdir(parents=True, exist_ok=True)
+    tmp = dest.with_suffix(".tmp.npy")
+    clean = np.ascontiguousarray(np.asarray(samples, dtype=np.float32), dtype=np.float32)
+    with tmp.open("wb") as fh:
+        np.save(fh, clean, allow_pickle=False)
+    tmp.replace(dest)
+    return dest
+
+
+def ensure_mono_preview_cache(
+    path: str | Path,
+    cache_dir: str | Path,
+    *,
+    file_hash: str | None = None,
+    sample_rate: int = 44100,
+) -> Path:
+    """Decode and persist the exact mono preview used by the GUI waveform."""
+    if file_hash is None:
+        h = hashlib.sha1()
+        with Path(path).open("rb") as fh:
+            for block in iter(lambda: fh.read(1 << 20), b""):
+                h.update(block)
+        file_hash = h.hexdigest()
+    dest = mono_preview_cache_path(cache_dir, file_hash, sample_rate=sample_rate)
+    if dest.is_file():
+        return dest
+    samples = decode_waveform_mono_samples(path, sample_rate=sample_rate)
+    return save_mono_preview_cache(samples, cache_dir, file_hash, sample_rate=sample_rate)
 
 
 def _decode_waveform_mono_samples_soundfile(path: str | Path) -> np.ndarray:

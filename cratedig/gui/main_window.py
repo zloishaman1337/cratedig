@@ -7,7 +7,7 @@ import subprocess
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QMetaObject, QThread, QTimer, Qt, Q_ARG, Signal
+from PySide6.QtCore import QMetaObject, QSettings, QThread, QTimer, Qt, Q_ARG, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -15,14 +15,15 @@ from PySide6.QtWidgets import (
     QInputDialog,
     QMainWindow,
     QMessageBox,
+    QProgressBar,
     QSplitter,
     QStackedWidget,
     QWidget,
     QVBoxLayout,
     QHBoxLayout,
+    QGridLayout,
     QPushButton,
     QStatusBar,
-    QToolBar,
 )
 
 from ..config import Config
@@ -35,6 +36,7 @@ from .logic import ABState, filename_parts, is_sample_favorite, tree_rows
 from .metadata_panel import MetadataPanel
 from .player import Player
 from .sample_table import SampleTable
+from .settings_dialog import SettingsDialog
 from .tag_editor import TagEditor
 from .tree_pane import TreePane
 from .simpler_pane import SimplerPane
@@ -81,6 +83,13 @@ class MainWindow(QMainWindow):
         self._preview_region: tuple[float, float] = (0.0, 0.0)
         self._preview_reverse = False
         self._preview_loop = False
+        self._settings = QSettings("cratedig", "cratedig")
+        self._auto_preview_on_select = self._settings.value(
+            "playback/auto_preview_on_select",
+            True,
+            type=bool,
+        )
+        self._settings_dialog: SettingsDialog | None = None
         self._ab_state = ABState(slot_a=None, slot_b=None, current='a')
         self._als_match_seq = 0
 
@@ -106,12 +115,19 @@ class MainWindow(QMainWindow):
 
         row1 = QHBoxLayout()
         row1.setContentsMargins(0, 0, 0, 0)
+        row1.setSpacing(4)
         row1.addWidget(play_btn)
         row1.addWidget(stop_btn)
         row1.addWidget(fav_btn)
         row1.addStretch()
 
-        # --- Row 2: Find similar + aspect checkboxes ---
+        transport_bar = QWidget()
+        transport_layout = QVBoxLayout(transport_bar)
+        transport_layout.setContentsMargins(4, 2, 4, 0)
+        transport_layout.setSpacing(0)
+        transport_layout.addLayout(row1)
+
+        # --- Similar search: compact block placed next to metadata ---
         similar_btn = QPushButton("Find similar")
         similar_btn.setShortcut("S")
         self._similar_btn = similar_btn
@@ -123,29 +139,42 @@ class MainWindow(QMainWindow):
             cb.setChecked(aspect == "Overall")
             self._aspect_boxes[aspect] = cb
 
-        row2 = QHBoxLayout()
-        row2.setContentsMargins(0, 0, 0, 0)
-        row2.addWidget(similar_btn)
-        for cb in self._aspect_boxes.values():
-            row2.addWidget(cb)
-        row2.addStretch()
+        similar_grid = QGridLayout()
+        similar_grid.setContentsMargins(0, 0, 0, 0)
+        similar_grid.setHorizontalSpacing(4)
+        similar_grid.setVerticalSpacing(0)
+        similar_grid.addWidget(similar_btn, 0, 0)
+        for idx, cb in enumerate(self._aspect_boxes.values()):
+            row = 0 if idx < 2 else 1
+            col = idx + 1 if idx < 2 else idx - 2
+            similar_grid.addWidget(cb, row, col)
+        similar_grid.setColumnStretch(4, 1)
 
-        btn_bar = QWidget()
-        btn_layout = QVBoxLayout(btn_bar)
-        btn_layout.setContentsMargins(4, 4, 4, 4)
-        btn_layout.setSpacing(2)
-        btn_layout.addLayout(row1)
-        btn_layout.addLayout(row2)
+        similar_bar = QWidget()
+        similar_layout = QVBoxLayout(similar_bar)
+        similar_layout.setContentsMargins(4, 0, 4, 2)
+        similar_layout.setSpacing(2)
+        similar_layout.addStretch()
+        similar_layout.addLayout(similar_grid)
+        similar_layout.addStretch()
 
         self._tag_editor = TagEditor()
         self._metadata_panel = MetadataPanel()
+        self._metadata_panel.setMaximumWidth(170)
+
+        metadata_row = QWidget()
+        metadata_layout = QHBoxLayout(metadata_row)
+        metadata_layout.setContentsMargins(0, 0, 0, 0)
+        metadata_layout.setSpacing(4)
+        metadata_layout.addWidget(self._metadata_panel, stretch=0)
+        metadata_layout.addWidget(similar_bar, stretch=1)
 
         right_panel = QWidget()
         right_layout = QVBoxLayout(right_panel)
         right_layout.setContentsMargins(0, 0, 0, 0)
-        right_layout.addWidget(self._simpler_pane, stretch=2)
-        right_layout.addWidget(btn_bar)
-        right_layout.addWidget(self._metadata_panel, stretch=0)
+        right_layout.addWidget(self._simpler_pane, stretch=1)
+        right_layout.addWidget(transport_bar, stretch=0)
+        right_layout.addWidget(metadata_row, stretch=0)
         right_layout.addWidget(self._tag_editor, stretch=0)
 
         # --- download pane (permanent bottom section) ---
@@ -157,12 +186,12 @@ class MainWindow(QMainWindow):
         top_splitter.addWidget(self._tree_pane)
         top_splitter.addWidget(self._sample_table)
         top_splitter.addWidget(right_panel)
-        top_splitter.setSizes([220, 500, 380])
+        top_splitter.setSizes([220, 680, 260])
 
         main_splitter = QSplitter(Qt.Orientation.Vertical)
         main_splitter.addWidget(top_splitter)
         main_splitter.addWidget(self._download_pane)
-        main_splitter.setSizes([500, 200])
+        main_splitter.setSizes([560, 140])
 
         # --- stacked pages: 0 = samples, 1 = Ableton (ALS) explorer, 2 = Health ---
         self._als_panel = AlsExplorerPanel()
@@ -173,23 +202,36 @@ class MainWindow(QMainWindow):
         self._pages.addWidget(self._health_panel) # index 2 — Health
 
         # --- left sidebar navigator (always visible) ---
+        self._settings_btn = QPushButton("Settings")
+        self._duplicates_btn = QPushButton("Duplicates")
+        self._ab_toggle_btn = QPushButton("AB Toggle")
         self._nav_samples = QPushButton("Samples")
         self._nav_ableton = QPushButton("Ableton")
         self._nav_health = QPushButton("Health")
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
+        for btn in (self._settings_btn, self._duplicates_btn, self._ab_toggle_btn):
+            btn.setMinimumHeight(40)
         for idx, btn in enumerate((self._nav_samples, self._nav_ableton, self._nav_health)):
             btn.setCheckable(True)
             btn.setMinimumHeight(40)
             self._nav_group.addButton(btn, idx)
         self._nav_samples.setChecked(True)
         self._nav_group.idClicked.connect(self._on_nav_clicked)
+        self._duplicates_btn.setShortcut("D")
+        self._ab_toggle_btn.setShortcut("X")
+        self._settings_btn.clicked.connect(self._on_settings)
+        self._duplicates_btn.clicked.connect(self._on_duplicates)
+        self._ab_toggle_btn.clicked.connect(self.toggle_ab_slot)
 
         sidebar = QWidget()
-        sidebar.setFixedWidth(96)
+        sidebar.setFixedWidth(80)
         sidebar_layout = QVBoxLayout(sidebar)
         sidebar_layout.setContentsMargins(6, 6, 6, 6)
         sidebar_layout.setSpacing(4)
+        sidebar_layout.addWidget(self._settings_btn)
+        sidebar_layout.addWidget(self._duplicates_btn)
+        sidebar_layout.addWidget(self._ab_toggle_btn)
         sidebar_layout.addWidget(self._nav_samples)
         sidebar_layout.addWidget(self._nav_ableton)
         sidebar_layout.addWidget(self._nav_health)
@@ -203,21 +245,14 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self._pages, stretch=1)
         self.setCentralWidget(central)
 
-        # --- toolbar (Duplicates only; Favorite moved to btn bar) ---
-        toolbar = QToolBar("Actions")
-        self.addToolBar(toolbar)
-
-        dup_action = toolbar.addAction("Duplicates")
-        dup_action.setShortcut("D")
-        dup_action.triggered.connect(self._on_duplicates)
-
-        self._ab_toggle_action = toolbar.addAction("A/B Toggle")
-        self._ab_toggle_action.setShortcut("X")
-        self._ab_toggle_action.triggered.connect(self.toggle_ab_slot)
-
         # --- status bar ---
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
+        self._operation_progress = QProgressBar()
+        self._operation_progress.setFixedWidth(220)
+        self._operation_progress.setTextVisible(True)
+        self._operation_progress.hide()
+        self._status_bar.addPermanentWidget(self._operation_progress)
         self._preview_timer = QTimer(self)
         self._preview_timer.setInterval(150)
         self._preview_timer.timeout.connect(self._poll_preview_playback)
@@ -231,6 +266,7 @@ class MainWindow(QMainWindow):
         self._worker.progress.connect(self._on_progress)
         self._worker.peaksReady.connect(self._on_peaks_ready)
         self._worker.searchReady.connect(self._on_search_ready)
+        self._worker.searchProgress.connect(self._on_search_progress)
         self._worker.similarReady.connect(self._on_similar_ready)
         self._worker.duplicatesReady.connect(self._on_duplicates_ready)
         self._worker.downloadDone.connect(self._on_download_done)
@@ -252,6 +288,7 @@ class MainWindow(QMainWindow):
 
         self._simpler_pane.preview_requested.connect(self._on_preview_edit)
         self._simpler_pane.preview_stop_requested.connect(self._on_stop_preview_edit)
+        self._simpler_pane.preview_params_changed.connect(self._on_preview_edit)
         self._simpler_pane.export_requested.connect(self._on_export_edit)
         self._simpler_pane.exported.connect(self._on_dragged_export)
 
@@ -273,6 +310,8 @@ class MainWindow(QMainWindow):
         self._sample_table.reveal_requested.connect(self._on_reveal)
         self._sample_table.add_to_crate_requested.connect(self._on_add_to_crate)
         self._sample_table.create_crate_requested.connect(self._on_create_crate)
+        self._sample_table.set_ab_a_requested.connect(self.set_ab_slot_a)
+        self._sample_table.set_ab_b_requested.connect(self.set_ab_slot_b)
 
         # Queued signal connections marshal Python objects across the thread
         # boundary without Q_ARG(object) (which has no QMetaType here).
@@ -369,12 +408,33 @@ class MainWindow(QMainWindow):
         self._fav_btn.setChecked(enabled and is_sample_favorite(self._favorites_by_id, s.id))
 
     def _on_progress(self, phase: str, done: int, total: int) -> None:
+        self._set_operation_progress(phase, done, total)
         if total > 0:
             self._status_bar.showMessage(f"{phase}: {done}/{total}")
         elif done > 0:
             self._status_bar.showMessage(f"{phase}: {done} processed")
         else:
             self._status_bar.showMessage(f"{phase}: done", 2000)
+
+    def _set_operation_progress(self, phase: str, done: int, total: int) -> None:
+        bar = self._operation_progress
+        if total > 0:
+            pct = int(round(max(0, min(done, total)) / total * 100))
+            bar.setRange(0, 100)
+            bar.setValue(pct)
+            bar.setFormat(f"{phase}: {done}/{total} ({pct}%)")
+            bar.show()
+            return
+        if done > 0:
+            bar.setRange(0, 0)
+            bar.setFormat(f"{phase}: {done}")
+            bar.show()
+            return
+        bar.setRange(0, 100)
+        bar.setValue(100)
+        bar.setFormat(f"{phase}: done")
+        bar.show()
+        QTimer.singleShot(2000, bar.hide)
 
     def _on_peaks_ready(self, seq: int, mono) -> None:
         if seq != self._current_seq:
@@ -383,6 +443,21 @@ class MainWindow(QMainWindow):
 
     def _on_worker_failed(self, context: str, message: str) -> None:
         self._status_bar.showMessage(f"Error [{context}]: {message}", 5000)
+
+    def _on_settings(self) -> None:
+        if self._settings_dialog is None:
+            dialog = SettingsDialog(self._auto_preview_on_select, self)
+            dialog.auto_preview_changed.connect(self._set_auto_preview_on_select)
+            dialog.finished.connect(lambda _result: setattr(self, "_settings_dialog", None))
+            self._settings_dialog = dialog
+        self._settings_dialog.set_auto_preview_enabled(self._auto_preview_on_select)
+        self._settings_dialog.show()
+        self._settings_dialog.raise_()
+        self._settings_dialog.activateWindow()
+
+    def _set_auto_preview_on_select(self, enabled: bool) -> None:
+        self._auto_preview_on_select = bool(enabled)
+        self._settings.setValue("playback/auto_preview_on_select", self._auto_preview_on_select)
 
     def _on_folder_selected(self, key: str, is_fav: bool) -> None:
         self._current_tree_key = key
@@ -451,10 +526,11 @@ class MainWindow(QMainWindow):
         self._metadata_panel.set_metadata(sample, None)
         self._simpler_pane.set_sample(sample.path, getattr(sample, "duration_sec", None))
         # Auto-preview the selected sample (matches TUI highlight-to-play).
-        try:
-            self._player.play(sample.path)
-        except Exception as exc:  # noqa: BLE001 — playback is best-effort
-            self._status_bar.showMessage(f"Playback error: {exc}", 3000)
+        if self._auto_preview_on_select:
+            try:
+                self._player.play(sample.path)
+            except Exception as exc:  # noqa: BLE001 — playback is best-effort
+                self._status_bar.showMessage(f"Playback error: {exc}", 3000)
         seq = self._current_seq
         w = max(self._simpler_pane.width(), 200)
         QMetaObject.invokeMethod(
@@ -475,9 +551,39 @@ class MainWindow(QMainWindow):
         """Delegate the edit render to the worker thread; play it on previewReady."""
         if not params.get("path"):
             return
+        self._player.stop()
+        self._set_preview_edit_playing(False)
         self._preview_seq += 1
         self._preview_pending_params = params
+        if self._can_play_preview_direct(params):
+            region = params.get("region")
+            start = float(region[0]) if region else None
+            duration = max(0.001, float(region[1]) - float(region[0])) if region else None
+            try:
+                self._player.play(
+                    params["path"],
+                    start_sec=start,
+                    duration_sec=duration,
+                    loop=bool(params.get("loop")),
+                )
+                self._start_preview_playhead(params, duration or 0.001)
+                self._set_preview_edit_playing(True)
+            except Exception as exc:  # noqa: BLE001
+                self._set_preview_edit_playing(False)
+                self._status_bar.showMessage(f"preview error: {exc}", 4000)
+            return
         self._preview_requested.emit(self._preview_seq, params["path"], params)
+
+    @staticmethod
+    def _can_play_preview_direct(params: dict) -> bool:
+        """True when ffplay can audition the region without a rendered temp WAV."""
+        return (
+            not bool(params.get("reverse"))
+            and abs(float(params.get("gain_db", 0.0))) < 1e-9
+            and float(params.get("fade_in", 0.0)) <= 0.0
+            and float(params.get("fade_out", 0.0)) <= 0.0
+            and not params.get("adsr")
+        )
 
     def _on_preview_ready(self, seq: int, path: str, duration: float) -> None:
         if seq != self._preview_seq:
@@ -492,6 +598,7 @@ class MainWindow(QMainWindow):
             self._status_bar.showMessage(f"preview error: {exc}", 4000)
 
     def _on_stop_preview_edit(self) -> None:
+        self._preview_seq += 1
         self._player.stop()
         self._set_preview_edit_playing(False)
 
@@ -558,10 +665,20 @@ class MainWindow(QMainWindow):
 
     def _on_search_requested(self, query: str, mode: str) -> None:
         self._search_seq += 1
+        self._download_pane.set_progress(None)
+        self._download_pane.set_status("Searching…")
         QMetaObject.invokeMethod(
             self._worker, "request_search", Qt.ConnectionType.QueuedConnection,
             Q_ARG(int, self._search_seq), Q_ARG(str, query), Q_ARG(str, mode), Q_ARG(int, 20),
         )
+
+    _SEARCH_PHASE_LABELS = {"hits": "Searching backends…", "metadata": "Enriching metadata…"}
+
+    def _on_search_progress(self, seq: int, phase: str) -> None:
+        if seq != self._search_seq:
+            return
+        self._download_pane.set_status(self._SEARCH_PHASE_LABELS.get(phase, phase))
+        self._download_pane.set_progress(None)
 
     def _on_search_ready(self, seq: int, hits: list, used: str) -> None:
         if seq != self._search_seq:

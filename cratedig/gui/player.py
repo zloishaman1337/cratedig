@@ -18,8 +18,15 @@ class Player:
         """Enable or disable loudness leveling on A/B slot switches."""
         self.apply_loudness_leveling = enable
 
-    def play(self, path: str | Path, *, loop: bool = False) -> None:
-        self._player.play(path, loop=loop)
+    def play(
+        self,
+        path: str | Path,
+        *,
+        start_sec: float | None = None,
+        duration_sec: float | None = None,
+        loop: bool = False,
+    ) -> None:
+        self._player.play(path, start_sec=start_sec, duration_sec=duration_sec, loop=loop)
 
     def stop(self) -> None:
         self._player.stop()

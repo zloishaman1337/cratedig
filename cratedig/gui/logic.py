@@ -148,8 +148,11 @@ def compute_peaks(samples: np.ndarray, width: int) -> list[tuple[float, float]]:
         return []
 
     n_bins = min(width, len(clean))
-    chunks = np.array_split(clean, n_bins)
-    return [(float(chunk.min()), float(chunk.max())) for chunk in chunks]
+    edges = np.linspace(0, len(clean), n_bins + 1, dtype=np.int64)
+    starts = edges[:-1]
+    mins = np.minimum.reduceat(clean, starts)[:n_bins]
+    maxs = np.maximum.reduceat(clean, starts)[:n_bins]
+    return [(float(lo), float(hi)) for lo, hi in zip(mins, maxs)]
 
 
 def tree_rows(

@@ -8,11 +8,12 @@ waveform itself is a drag source that renders to the Saved folder on drag-start.
 
 from __future__ import annotations
 
+import re
 from math import log10
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QEvent, QMimeData, QPointF, QRectF, Qt, QUrl, Signal
+from PySide6.QtCore import QEvent, QMimeData, QPointF, QRectF, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QDrag,
@@ -51,6 +52,8 @@ from .logic import clamp_region, compute_peaks, time_to_x, x_to_time
 _HANDLE_GRAB_PX = 8
 _MIN_VIEW_SEC = 0.02
 _PAN_SPEED = 4.0
+_LIVE_RENDER_MAX_SAMPLES = 300_000
+_EDIT_SUFFIX_RE = re.compile(r"(?:_edit_\d{6})+$")
 
 
 class _WaveCanvas(QWidget):
@@ -65,6 +68,7 @@ class _WaveCanvas(QWidget):
         self._peaks: list[tuple[float, float]] = []
         self._rendered_mono: np.ndarray | None = None
         self._rendered_peaks: list[tuple[float, float]] = []
+        self._rendered_source_region: tuple[float, float] = (0.0, 0.0)
         self.adsr: ADSR | None = None
         self.loop_enabled = False
         self.duration = 0.0
@@ -76,11 +80,12 @@ class _WaveCanvas(QWidget):
         self._transients: list[float] = []
         self._show_transients = True
         self._drag_handle: str | None = None
+        self._drag_handle_changed = False
         self._press_pos = None
         self._panning = False
         self._pan_press_x = 0.0
         self._pan_press_view: tuple[float, float] = (0.0, 0.0)
-        self.setMinimumHeight(120)
+        self.setMinimumHeight(96)
         self.setMouseTracking(True)
         self.setFocusPolicy(Qt.FocusPolicy.StrongFocus)
         self.grabGesture(Qt.GestureType.PinchGesture)
@@ -101,6 +106,7 @@ class _WaveCanvas(QWidget):
 
     def set_rendered_mono(self, mono: np.ndarray | None) -> None:
         self._rendered_mono = None if mono is None else np.asarray(mono, dtype=np.float32)
+        self._rendered_source_region = self.region if mono is not None else (0.0, 0.0)
         self._recompute_rendered()
         self.update()
 
@@ -193,8 +199,10 @@ class _WaveCanvas(QWidget):
         start, end = self.region
         return self._time_to_view_x(start), self._time_to_view_x(end)
 
-    def _region_peak_width(self) -> int:
-        start_x, end_x = self._region_view_x()
+    def _region_peak_width(self, region: tuple[float, float] | None = None) -> int:
+        start, end = self.region if region is None else region
+        start_x = self._time_to_view_x(start)
+        end_x = self._time_to_view_x(end)
         if self.width() <= 0:
             return 0
         # Cache the rendered edit at the region's current on-screen scale. This
@@ -205,7 +213,7 @@ class _WaveCanvas(QWidget):
         if self._rendered_mono is None or self._rendered_mono.size == 0:
             self._rendered_peaks = []
             return
-        width = self._region_peak_width()
+        width = self._region_peak_width(self._rendered_source_region)
         self._rendered_peaks = compute_peaks(self._rendered_mono, width)
 
     def _x_to_time(self, x: float) -> float:
@@ -286,6 +294,61 @@ class _WaveCanvas(QWidget):
             painter.setBrush(brush_color)
             painter.drawPolygon(poly)
 
+    def _peaks_for_interval(
+        self,
+        peaks: list[tuple[float, float]],
+        source_start: float,
+        source_end: float,
+        interval_start: float,
+        interval_end: float,
+    ) -> list[tuple[float, float]]:
+        if not peaks or source_end <= source_start or interval_end <= interval_start:
+            return []
+        a = max(source_start, interval_start)
+        b = min(source_end, interval_end)
+        if b <= a:
+            return []
+        start_ratio = (a - source_start) / (source_end - source_start)
+        end_ratio = (b - source_start) / (source_end - source_start)
+        i0 = max(0, min(len(peaks), int(np.floor(start_ratio * len(peaks)))))
+        i1 = max(i0 + 1, min(len(peaks), int(np.ceil(end_ratio * len(peaks)))))
+        return peaks[i0:i1]
+
+    def _rendered_preview_interval(self) -> tuple[float, float]:
+        source_start, source_end = self._rendered_source_region
+        view_start, view_end = self.view
+        return max(view_start, source_start), min(view_end, source_end)
+
+    def _draw_peak_waveform(
+        self,
+        painter: QPainter,
+        peaks: list[tuple[float, float]],
+        x0: float,
+        x1: float,
+        mid: float,
+        scale: float,
+        pen_color: QColor,
+        brush_color: QColor | None,
+    ) -> None:
+        if not peaks or x1 <= x0:
+            return
+        painter.setPen(QPen(pen_color, 1))
+        top: list[QPointF] = []
+        bot: list[QPointF] = []
+        step = (x1 - x0) / max(1, len(peaks) - 1)
+        for i, (lo, hi) in enumerate(peaks):
+            x = x0 + i * step
+            lo_c = max(-1.0, min(1.0, float(lo)))
+            hi_c = max(-1.0, min(1.0, float(hi)))
+            top.append(QPointF(x, mid - hi_c * scale))
+            bot.append(QPointF(x, mid - lo_c * scale))
+        if brush_color is None:
+            painter.drawPolyline(QPolygonF(top))
+            painter.drawPolyline(QPolygonF(bot))
+        else:
+            painter.setBrush(brush_color)
+            painter.drawPolygon(QPolygonF(top + bot[::-1]))
+
     def _zoom_at(self, factor: float, x: float) -> None:
         if self.duration <= 0:
             return
@@ -331,6 +394,7 @@ class _WaveCanvas(QWidget):
         if event.button() != Qt.MouseButton.LeftButton:
             return
         self._drag_handle = self._pick_handle(int(event.position().x()))
+        self._drag_handle_changed = False
         self._press_pos = event.position()
 
     def mouseMoveEvent(self, event) -> None:
@@ -362,7 +426,7 @@ class _WaveCanvas(QWidget):
         elif self._drag_handle == "fade_out":
             self.fade_out = max(0.0, min(end - t, end - start))
         self.region = (start, end)
-        self.edit_changed.emit()
+        self._drag_handle_changed = True
         self.update()
 
     def mouseReleaseEvent(self, event) -> None:
@@ -373,8 +437,12 @@ class _WaveCanvas(QWidget):
             return
         if event.button() != Qt.MouseButton.LeftButton:
             return
+        changed = self._drag_handle_changed
         self._drag_handle = None
+        self._drag_handle_changed = False
         self._press_pos = None
+        if changed:
+            self.edit_changed.emit()
 
     def wheelEvent(self, event) -> None:
         if not event.modifiers() & Qt.KeyboardModifier.ControlModifier:
@@ -440,10 +508,11 @@ class _WaveCanvas(QWidget):
         scale = mid * 0.95
         view_start, view_end = self.view
         source_color = QColor(80, 160, 80)
-        if self._rendered_peaks and region_end_x > region_start_x:
+        if self._rendered_peaks:
+            rendered_start, rendered_end = self._rendered_source_region
             intervals = [
-                (view_start, min(view_end, self.region[0])),
-                (max(view_start, self.region[1]), view_end),
+                (view_start, min(view_end, rendered_start)),
+                (max(view_start, rendered_end), view_end),
             ]
         else:
             intervals = [(view_start, view_end)]
@@ -462,14 +531,15 @@ class _WaveCanvas(QWidget):
                 source_color,
             )
 
-        # Rendered edit preview inside the selected region.
-        if self._rendered_mono is not None and self._rendered_mono.size and region_end_x > region_start_x:
-            a = max(view_start, self.region[0])
-            b = min(view_end, self.region[1])
-            samples = self._samples_for_interval(self._rendered_mono, self.region[0], self.region[1], a, b)
-            self._draw_waveform(
+        # Rendered edit preview remains anchored to the region that produced it
+        # until the next debounced live render replaces it.
+        if self._rendered_peaks:
+            source_start, source_end = self._rendered_source_region
+            a, b = self._rendered_preview_interval()
+            peaks = self._peaks_for_interval(self._rendered_peaks, source_start, source_end, a, b)
+            self._draw_peak_waveform(
                 painter,
-                samples,
+                peaks,
                 self._time_to_view_x(a),
                 self._time_to_view_x(b),
                 mid,
@@ -571,18 +641,20 @@ class _Knob(QWidget):
         self._dial.setRange(0, int(round((hi - lo) / step)))
         self._dial.setNotchesVisible(False)
         self._dial.setWrapping(False)
-        self._dial.setFixedSize(38, 38)
+        self._dial.setFixedSize(28, 28)
         self._dial.valueChanged.connect(self._on_dial_changed)
 
         self._value_label = QLabel()
         self._value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._value_label.setFixedWidth(64)
+        self._value_label.setFixedWidth(54)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         title = QLabel(label)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
+        title.setStyleSheet("font-size: 10px;")
+        self._value_label.setStyleSheet("font-size: 10px;")
         layout.addWidget(title)
         layout.addWidget(self._dial, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._value_label)
@@ -613,6 +685,7 @@ class SimplerPane(QWidget):
 
     preview_requested = Signal(object)  # params dict
     preview_stop_requested = Signal()
+    preview_params_changed = Signal(object)  # params dict
     export_requested = Signal(object)   # params dict
     exported = Signal(str)              # path of a drag-exported WAV (for indexing)
     render_stage_requested = Signal(int, str, object)  # (seq, path, params) — drag pre-render
@@ -627,10 +700,18 @@ class SimplerPane(QWidget):
         self._staged_render_path: str | None = None
         self._stage_seq = 0
         self._staged_key: tuple | None = None
+        self._stage_timer = QTimer(self)
+        self._stage_timer.setSingleShot(True)
+        self._stage_timer.setInterval(250)
+        self._stage_timer.timeout.connect(self.request_stage_render)
+        self._live_render_timer = QTimer(self)
+        self._live_render_timer.setSingleShot(True)
+        self._live_render_timer.setInterval(35)
+        self._live_render_timer.timeout.connect(self._sync_live_render)
 
         self._canvas = _WaveCanvas()
         self._canvas.drag_started.connect(self._start_drag)
-        self._canvas.edit_changed.connect(self._sync_live_render)
+        self._canvas.edit_changed.connect(self._on_canvas_edit_changed)
 
         self._reverse = QCheckBox("Reverse")
         self._loop = QPushButton("Loop")
@@ -647,10 +728,12 @@ class SimplerPane(QWidget):
         self._trim_btn = QPushButton("Trim")
         self._snap_btn = QPushButton("Snap")
         self._slice_btn = QPushButton("Slice")
-        self._reverse.stateChanged.connect(self._sync_live_render)
+        for button in (self._loop, self._normalize_btn, self._trim_btn, self._snap_btn, self._slice_btn):
+            button.setMaximumHeight(24)
+        self._reverse.stateChanged.connect(self._on_preview_control_changed)
         self._loop.toggled.connect(self._on_loop_toggled)
         for knob in (self._gain, self._attack, self._decay, self._sustain, self._release):
-            knob.valueChanged.connect(self._sync_live_render)
+            knob.valueChanged.connect(self._on_preview_control_changed)
         self._sensitivity.valueChanged.connect(self._recompute_transients)
         self._markers_cb.toggled.connect(self._canvas.set_show_transients)
         self._normalize_btn.clicked.connect(self._on_normalize)
@@ -663,36 +746,45 @@ class SimplerPane(QWidget):
         self._preview_btn = preview_btn
         self._preview_state = QLabel("Stopped")
         self._preview_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._preview_state.setMinimumWidth(64)
+        self._preview_state.setMinimumWidth(50)
         export_btn = QPushButton("Export → Saved")
         export_btn.clicked.connect(lambda: self.export_requested.emit(self.current_params()))
+        preview_btn.setMaximumHeight(24)
+        export_btn.setMaximumHeight(24)
         self._preview_shortcut = QShortcut(QKeySequence(Qt.Key.Key_Space), self)
         self._preview_shortcut.activated.connect(self.trigger_preview)
 
-        controls = QHBoxLayout()
-        controls.setContentsMargins(2, 2, 2, 2)
-        controls.addWidget(self._reverse)
-        controls.addWidget(self._loop)
-        controls.addWidget(self._gain)
-        controls.addWidget(self._attack)
-        controls.addWidget(self._decay)
-        controls.addWidget(self._sustain)
-        controls.addWidget(self._release)
-        controls.addWidget(self._sensitivity)
-        controls.addWidget(self._markers_cb)
-        controls.addWidget(self._normalize_btn)
-        controls.addWidget(self._trim_btn)
-        controls.addWidget(self._snap_btn)
-        controls.addWidget(self._slice_btn)
-        controls.addStretch()
-        controls.addWidget(self._preview_state)
-        controls.addWidget(preview_btn)
-        controls.addWidget(export_btn)
+        edit_row = QHBoxLayout()
+        edit_row.setContentsMargins(2, 2, 2, 0)
+        edit_row.setSpacing(4)
+        edit_row.addWidget(self._reverse)
+        edit_row.addWidget(self._loop)
+        edit_row.addWidget(self._gain)
+        edit_row.addWidget(self._attack)
+        edit_row.addWidget(self._decay)
+        edit_row.addWidget(self._sustain)
+        edit_row.addWidget(self._release)
+        edit_row.addWidget(self._sensitivity)
+        edit_row.addStretch()
+
+        action_row = QHBoxLayout()
+        action_row.setContentsMargins(2, 0, 2, 2)
+        action_row.setSpacing(4)
+        action_row.addWidget(self._markers_cb)
+        action_row.addWidget(self._normalize_btn)
+        action_row.addWidget(self._trim_btn)
+        action_row.addWidget(self._snap_btn)
+        action_row.addWidget(self._slice_btn)
+        action_row.addStretch()
+        action_row.addWidget(self._preview_state)
+        action_row.addWidget(preview_btn)
+        action_row.addWidget(export_btn)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._canvas, stretch=1)
-        layout.addLayout(controls)
+        layout.addLayout(edit_row)
+        layout.addLayout(action_row)
         self.set_preview_playing(False)
 
     @staticmethod
@@ -705,6 +797,9 @@ class SimplerPane(QWidget):
         self._path = path
         self._slices = []
         self._slice_idx = 0
+        self._canvas.set_mono(None)
+        self._staged_render_path = None
+        self._staged_key = None
         self._canvas.set_sample(duration or 0.0)
         self._sync_live_render()
         self._recompute_transients()
@@ -757,6 +852,22 @@ class SimplerPane(QWidget):
     def _on_loop_toggled(self, checked: bool) -> None:
         self._canvas.set_loop_enabled(checked)
         self._sync_live_render()
+        self._restart_preview_if_playing()
+
+    def _on_preview_control_changed(self, *_args) -> None:
+        self._sync_live_render()
+        self._restart_preview_if_playing()
+
+    def _on_canvas_edit_changed(self) -> None:
+        self._schedule_live_render()
+        self._restart_preview_if_playing()
+
+    def _restart_preview_if_playing(self) -> None:
+        if self._preview_playing:
+            self.preview_params_changed.emit(self.current_params())
+
+    def _schedule_live_render(self) -> None:
+        self._live_render_timer.start()
 
     def _sync_live_render(self, *_args) -> None:
         adsr = self._current_adsr()
@@ -766,12 +877,23 @@ class SimplerPane(QWidget):
         if mono is None or mono.size == 0 or self._canvas.duration <= 0:
             self._canvas.set_rendered_mono(None)
             return
-        sr = max(1, int(round(mono.size / self._canvas.duration)))
+        start, end = self._canvas.region
+        region_len = max(0.001, end - start)
+        if self._canvas.duration > 0 and end > start:
+            i0 = max(0, min(mono.size, int(round(start / self._canvas.duration * mono.size))))
+            i1 = max(i0 + 1, min(mono.size, int(round(end / self._canvas.duration * mono.size))))
+            visual_mono = mono[i0:i1]
+        else:
+            visual_mono = mono
+        if visual_mono.size > _LIVE_RENDER_MAX_SAMPLES:
+            step = int(np.ceil(visual_mono.size / _LIVE_RENDER_MAX_SAMPLES))
+            visual_mono = visual_mono[::step]
+        sr = max(1, int(round(visual_mono.size / region_len)))
         try:
             rendered = apply_edit(
-                mono,
+                visual_mono,
                 sr,
-                self._canvas.region,
+                None,
                 reverse=self._reverse.isChecked(),
                 gain_db=self._gain.value(),
                 fade_in=self._canvas.fade_in,
@@ -784,7 +906,7 @@ class SimplerPane(QWidget):
         self._canvas.set_rendered_mono(rendered)
         # params changed → invalidate the staged drag render and pre-render a fresh
         # one on the worker thread; drag falls back to a synchronous render until ready.
-        self.request_stage_render()
+        self._schedule_stage_render()
 
     @staticmethod
     def _params_key(p: dict) -> tuple:
@@ -802,6 +924,9 @@ class SimplerPane(QWidget):
         self._staged_render_path = None
         self._staged_key = self._params_key(params)
         self.render_stage_requested.emit(self._stage_seq, params["path"], params)
+
+    def _schedule_stage_render(self) -> None:
+        self._stage_timer.start()
 
     def set_staged_render_path(self, seq: int, path: str) -> None:
         """Worker callback: store the pre-rendered drag file if still current."""
@@ -823,6 +948,24 @@ class SimplerPane(QWidget):
         dest.parent.mkdir(parents=True, exist_ok=True)
         shutil.copyfile(sp, dest)
         return dest
+
+    def _drag_display_name(self) -> str:
+        """Human-facing filename for external drag targets; content is always WAV."""
+        stem = Path(self._path or "sample").stem
+        stem = _EDIT_SUFFIX_RE.sub("", stem) or stem
+        return f"{stem}.wav"
+
+    def _drag_payload_path(self, service_path: Path) -> Path:
+        """Copy the service export to a temp path with the original-facing name."""
+        import shutil
+        import tempfile
+        import uuid
+
+        drag_dir = Path(tempfile.gettempdir()) / "cratedig_drag" / uuid.uuid4().hex
+        drag_dir.mkdir(parents=True, exist_ok=True)
+        drag_path = drag_dir / self._drag_display_name()
+        shutil.copyfile(service_path, drag_path)
+        return drag_path
 
     def _mono_sr(self) -> tuple[np.ndarray | None, int]:
         mono = self._canvas._mono
@@ -872,6 +1015,7 @@ class SimplerPane(QWidget):
             self._canvas.region = clamp_region(start_sec, end_sec, self._canvas.duration)
             self._sync_live_render()
             self._canvas.update()
+            self._restart_preview_if_playing()
 
     def _on_snap(self) -> None:
         mono, sr = self._mono_sr()
@@ -883,6 +1027,7 @@ class SimplerPane(QWidget):
         self._canvas.region = clamp_region(ns, ne, self._canvas.duration)
         self._sync_live_render()
         self._canvas.update()
+        self._restart_preview_if_playing()
 
     def _on_slice(self) -> None:
         mono, sr = self._mono_sr()
@@ -897,6 +1042,7 @@ class SimplerPane(QWidget):
         self._canvas.region = clamp_region(start, end, self._canvas.duration)
         self._sync_live_render()
         self._canvas.update()
+        self._restart_preview_if_playing()
 
     def trigger_preview(self) -> None:
         if self._preview_playing:
@@ -915,20 +1061,20 @@ class SimplerPane(QWidget):
                 dest = self._render_to_saved()
             except Exception:  # noqa: BLE001 — drag-export is best-effort
                 return
+        try:
+            drag_path = self._drag_payload_path(dest).resolve()
+        except OSError:
+            drag_path = dest.resolve()
         mime = QMimeData()
-        mime.setUrls([QUrl.fromLocalFile(str(dest))])
+        mime.setUrls([QUrl.fromLocalFile(str(drag_path))])
+        mime.setText(str(drag_path))
         drag = QDrag(self)
         drag.setMimeData(mime)
-        action = drag.exec(Qt.DropAction.CopyAction)
-        # Only a copy drop counts as an export; cancel/ignore (or any non-copy
-        # action) drops the rendered orphan so the Saved folder stays clean.
-        if action == Qt.DropAction.CopyAction:
-            self.exported.emit(str(dest))
-        else:
-            try:
-                dest.unlink(missing_ok=True)
-            except OSError:
-                pass
+        drag.exec(Qt.DropAction.CopyAction | Qt.DropAction.MoveAction, Qt.DropAction.CopyAction)
+        # Keep the rendered file regardless of the returned action. Several
+        # external Windows targets report IgnoreAction even when they consume the
+        # file URL, and some read the file after QDrag.exec returns.
+        self.exported.emit(str(dest.resolve()))
 
     def _render_to_saved(self) -> Path:
         p = self.current_params()

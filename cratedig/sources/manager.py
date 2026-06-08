@@ -58,7 +58,13 @@ class DownloadManager:
         return out
 
     # --- search ---------------------------------------------------------------
-    def search(self, query: str, mode: str = "tracks", limit: int = 20) -> tuple[list[SearchHit], str]:
+    def search(
+        self,
+        query: str,
+        mode: str = "tracks",
+        limit: int = 20,
+        progress: Callable[[str], None] | None = None,
+    ) -> tuple[list[SearchHit], str]:
         """Search a mode. Returns (hits, used_backend).
 
         mode "samples": search FreeSound.
@@ -71,6 +77,9 @@ class DownloadManager:
             order = TRACK_FALLBACK
         else:
             order = [mode]
+
+        if progress:
+            progress("hits")
 
         last_err = ""
         all_hits: list[SearchHit] = []
@@ -92,6 +101,8 @@ class DownloadManager:
                 return hits, name
         if all_hits:
             if mode == "tracks":
+                if progress:
+                    progress("metadata")
                 all_hits = rank_track_hits(
                     self.db, self.cfg.metadata, PROVIDERS, query, all_hits
                 )

@@ -89,12 +89,25 @@ def iter_audio_files(root: Path, extensions: tuple[str, ...]) -> Iterator[Path]:
             yield p
 
 
+def _ensure_preview_cache(path: Path, preview_cache_dir: Path | None, file_hash: str) -> None:
+    if preview_cache_dir is None:
+        return
+    try:
+        from ..audio.playback import ensure_mono_preview_cache
+
+        ensure_mono_preview_cache(path, preview_cache_dir, file_hash=file_hash)
+    except Exception:
+        # Scan should still index files even when a preview cache cannot be built.
+        pass
+
+
 def scan_directory(
     db: Database,
     root: Path,
     extensions: tuple[str, ...],
     source: str = "local",
     progress: Callable[[Path, int], None] | None = None,
+    preview_cache_dir: Path | None = None,
 ) -> int:
     """Index every audio file under `root`. Returns count of files processed.
 
@@ -109,6 +122,14 @@ def scan_directory(
         spath = str(fp.resolve())
         seen_paths.add(spath)
         if db.path_exists(spath):
+            with db.lock:
+                row = db.conn.execute(
+                    "SELECT file_hash FROM samples WHERE path=?", (spath,)
+                ).fetchone()
+            file_hash = row["file_hash"] if row is not None else None
+            if file_hash is None:
+                file_hash = _sha1(fp)
+            _ensure_preview_cache(fp, preview_cache_dir, file_hash)
             if source == "edit":
                 meta = probe_file(fp)
                 sample = Sample(
@@ -116,7 +137,7 @@ def scan_directory(
                     path=spath,
                     filename=fp.name,
                     source=source,
-                    file_hash=_sha1(fp),
+                    file_hash=file_hash,
                     format=meta["format"],
                     file_size=meta["file_size"],
                     duration_sec=meta["duration_sec"],
@@ -128,13 +149,14 @@ def scan_directory(
                 )
                 db.upsert_sample(sample)
             continue
+        file_hash = _sha1(fp)
         meta = probe_file(fp)
         sample = Sample(
             id=None,
             path=spath,
             filename=fp.name,
             source=source,
-            file_hash=_sha1(fp),
+            file_hash=file_hash,
             format=meta["format"],
             file_size=meta["file_size"],
             duration_sec=meta["duration_sec"],
@@ -145,6 +167,7 @@ def scan_directory(
             created_at=now,
         )
         db.upsert_sample(sample)
+        _ensure_preview_cache(fp, preview_cache_dir, file_hash)
         count += 1
         if progress:
             progress(fp, count)

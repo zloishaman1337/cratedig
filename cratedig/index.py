@@ -22,14 +22,15 @@ def scan_libraries(
     db: Database, cfg: Config, progress: Callable[[Path, int], None] | None = None
 ) -> int:
     total = 0
+    preview_cache_dir = cfg.paths.db.parent / "waveform_cache"
     for d in cfg.paths.library_dirs:
         if d.is_dir():
-            total += scan_directory(db, d, cfg.audio.extensions, "local", progress)
+            total += scan_directory(db, d, cfg.audio.extensions, "local", progress, preview_cache_dir)
     # The Saved folder is a scanned root too, so Simpler exports auto-index;
     # its rows are tagged source='edit' for the pinned "Saved" tree branch.
     saved = cfg.paths.saved_dir
     if saved.is_dir():
-        total += scan_directory(db, saved, cfg.audio.extensions, "edit", progress)
+        total += scan_directory(db, saved, cfg.audio.extensions, "edit", progress, preview_cache_dir)
     return total
 
 

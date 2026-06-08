@@ -28,6 +28,7 @@ class IndexWorker(QObject):
     progress = Signal(str, int, int)            # (phase, done, total)
     peaksReady = Signal(int, object)            # (seq, mono_ndarray)
     searchReady = Signal(int, object, str)      # (seq, hits_list[SearchHit], used_backend)
+    searchProgress = Signal(int, str)           # (seq, phase)
     similarReady = Signal(int, object, int, object)  # (seq, samples_list[Sample], source_id, scores_dict)
     duplicatesReady = Signal(object)            # (samples_list[Sample])
     downloadDone = Signal(bool, str)            # (ok, message)
@@ -204,10 +205,27 @@ class IndexWorker(QObject):
     @Slot(int, str, int)
     def request_peaks(self, seq: int, path: str, width: int) -> None:
         """Decode waveform for path to mono samples used by the GUI canvas."""
-        from ..audio.playback import decode_waveform_mono_samples
+        from ..audio.playback import (
+            decode_waveform_mono_samples,
+            load_mono_preview_cache,
+            save_mono_preview_cache,
+        )
 
         try:
-            self.peaksReady.emit(seq, decode_waveform_mono_samples(path))
+            cache_dir = self._cfg.paths.db.parent / "waveform_cache"
+            sample_hash = None
+            with self._db.lock:
+                row = self._db.conn.execute(
+                    "SELECT file_hash FROM samples WHERE path=?", (path,)
+                ).fetchone()
+            if row is not None:
+                sample_hash = row["file_hash"]
+            mono = load_mono_preview_cache(cache_dir, sample_hash)
+            if mono is None:
+                mono = decode_waveform_mono_samples(path)
+                if sample_hash:
+                    save_mono_preview_cache(mono, cache_dir, sample_hash)
+            self.peaksReady.emit(seq, mono)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("peaks", str(exc))
 
@@ -346,7 +364,14 @@ class IndexWorker(QObject):
 
         saved = self._cfg.paths.saved_dir
         if saved.is_dir():
-            scan_directory(self._db, saved, self._cfg.audio.extensions, "edit", None)
+            scan_directory(
+                self._db,
+                saved,
+                self._cfg.audio.extensions,
+                "edit",
+                None,
+                self._cfg.paths.db.parent / "waveform_cache",
+            )
 
     @Slot()
     def request_duplicates(self) -> None:
@@ -361,7 +386,10 @@ class IndexWorker(QObject):
     def request_search(self, seq: int, query: str, mode: str, limit: int) -> None:
         """Search source backends for a query; emit hits tagged with seq."""
         try:
-            hits, used = self._manager().search(query, mode=mode, limit=limit)
+            def _progress(phase: str) -> None:
+                self.searchProgress.emit(seq, phase)
+
+            hits, used = self._manager().search(query, mode=mode, limit=limit, progress=_progress)
             self.searchReady.emit(seq, hits, used)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("search", str(exc))

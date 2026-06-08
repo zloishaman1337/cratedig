@@ -99,3 +99,31 @@ def test_scan_saved_updates_existing_local_row_to_edit(tmp_path):
     assert len(samples) == 1
     assert samples[0].source == "edit"
     db.close()
+
+
+def test_scan_builds_desktop_preview_cache(tmp_path, monkeypatch):
+    lib = tmp_path / "lib"
+    lib.mkdir()
+    audio = lib / "kick.wav"
+    _write_wav(audio)
+    calls = []
+
+    def fake_ensure(path, cache_dir, *, file_hash, sample_rate=44100):
+        calls.append((path, cache_dir, file_hash, sample_rate))
+
+    monkeypatch.setattr("cratedig.audio.playback.ensure_mono_preview_cache", fake_ensure)
+
+    db = Database(tmp_path / "s.db")
+    assert scan_directory(
+        db,
+        lib,
+        extensions=(".wav",),
+        preview_cache_dir=tmp_path / "cache",
+    ) == 1
+
+    assert calls
+    assert calls[0][0] == audio
+    assert calls[0][1] == tmp_path / "cache"
+    assert len(calls[0][2]) == 40
+    assert calls[0][3] == 44100
+    db.close()

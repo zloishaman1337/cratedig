@@ -141,11 +141,28 @@ def render_edit(
     """Read `path` with soundfile and apply the edit chain. Returns (buffer, sr)."""
     import soundfile as sf
 
-    audio, sr = sf.read(str(path), dtype="float32", always_2d=False)
+    read_region = region
+    file_info = sf.info(str(path))
+    sr = int(file_info.samplerate)
+    if region is not None:
+        start_sec, end_sec = sorted(region)
+        start = max(0, min(file_info.frames, int(round(start_sec * sr))))
+        stop = max(start, min(file_info.frames, int(round(end_sec * sr))))
+        audio, _sr = sf.read(
+            str(path),
+            start=start,
+            frames=stop - start,
+            dtype="float32",
+            always_2d=False,
+        )
+        read_region = None
+    else:
+        audio, _sr = sf.read(str(path), dtype="float32", always_2d=False)
+        sr = int(_sr)
     edited = apply_edit(
         audio,
         sr,
-        region,
+        read_region,
         reverse=reverse,
         gain_db=gain_db,
         fade_in=fade_in,
@@ -198,52 +215,124 @@ def _frames_rms(mono: np.ndarray, hop: int, win: int) -> np.ndarray:
     return np.sqrt(np.mean(frames ** 2, axis=1)).astype(np.float32)
 
 
+def _frames_peak(mono: np.ndarray, hop: int, win: int) -> np.ndarray:
+    """Return per-frame max-abs amplitude for a 1-D signal using strided views.
+
+    Unlike RMS, the per-frame peak reacts to sharp, sample-scale transients (e.g.
+    a single loud spike) that an RMS window would average away. That makes onset
+    detection robust on long, noisy material where real hits are short but loud.
+    """
+    n = len(mono)
+    if n == 0 or hop <= 0 or win <= 0:
+        return np.empty(0, dtype=np.float32)
+    pad = win - 1
+    padded = np.pad(np.abs(mono), (0, pad), mode="constant")
+    n_frames = (n + hop - 1) // hop
+    shape = (n_frames, win)
+    strides = (padded.strides[0] * hop, padded.strides[0])
+    frames = np.lib.stride_tricks.as_strided(padded, shape=shape, strides=strides)
+    return np.max(frames, axis=1).astype(np.float32)
+
+
 def detect_transients(
     mono: np.ndarray,
     sr: int,
     *,
     sensitivity: float = 0.5,
-    min_gap_sec: float = 0.03,
+    min_gap_sec: float = 0.06,
 ) -> list[float]:
     """Return transient onset times in seconds (ascending).
 
-    Algorithm: frame the signal with ~10 ms hop / ~20 ms window, compute per-frame
-    RMS, take the positive first-difference (spectral-flux proxy), then pick peaks
-    above `mean + sensitivity * std` of that novelty curve; enforce `min_gap_sec`
-    between accepted peaks.
+    Algorithm: frame the signal with ~5 ms hop / ~20 ms window, compute a
+    peak/RMS hybrid envelope, smooth it lightly, then take its positive
+    first-difference as novelty. Candidate frames must be local maxima above an
+    adaptive local median/MAD floor and a modest percentile-derived global floor.
+    `sensitivity` raises the floors, so higher values mark fewer transients.
     """
     mono = np.asarray(mono, dtype=np.float32)
     if mono.ndim != 1 or mono.size == 0 or sr <= 0:
         return []
 
-    hop = max(1, int(round(0.010 * sr)))
+    sensitivity = max(0.0, min(1.0, float(sensitivity)))
+    hop = max(1, int(round(0.005 * sr)))
     win = max(2, int(round(0.020 * sr)))
 
+    peak = _frames_peak(mono, hop, win)
     rms = _frames_rms(mono, hop, win)
-    if rms.size < 2:
+    if peak.size < 2 or rms.size < 2:
         return []
 
-    # Positive first-difference novelty function.
-    novelty = np.diff(rms, prepend=rms[0])
+    feature = 0.65 * peak + 0.35 * rms
+    smooth_win = max(1, int(round(0.015 * sr / hop)))
+    if smooth_win > 1:
+        kernel = np.ones(smooth_win, dtype=np.float64) / smooth_win
+        half_smooth = smooth_win // 2
+        padded_feature = np.pad(feature, (half_smooth, half_smooth), mode="edge")
+        feature = np.convolve(padded_feature.astype(np.float64), kernel, mode="valid")[:feature.size].astype(np.float32)
+
+    # Positive first-difference novelty function (sample-scale onset energy).
+    novelty = np.diff(feature, prepend=feature[0])
     novelty = np.maximum(novelty, 0.0)
 
-    mean_n = float(np.mean(novelty))
-    std_n = float(np.std(novelty))
-    threshold = mean_n + sensitivity * std_n
-
-    if threshold <= 0.0 or float(np.max(novelty)) <= 0.0:
+    max_nov = float(np.max(novelty))
+    if max_nov <= 0.0:
         return []
+
+    # Adaptive floor: local median + local MAD over ~0.3s. Median/MAD is less
+    # eager than mean/std on short tonal files with lots of small wiggles.
+    local_win = max(5, int(round(0.3 * sr / hop)))
+    half = local_win // 2
+    padded_novelty = np.pad(novelty, (half, half), mode="edge")
+    local_median = np.empty_like(novelty)
+    local_mad = np.empty_like(novelty)
+    for i in range(len(novelty)):
+        window = padded_novelty[i:i + local_win]
+        med = float(np.median(window))
+        local_median[i] = med
+        local_mad[i] = float(np.median(np.abs(window - med)))
+    adaptive_threshold = local_median + (2.0 + 4.0 * sensitivity) * local_mad
+
+    active = novelty[novelty > 0]
+    if active.size == 0:
+        return []
+    # Use a high percentile rather than max so one huge hit does not hide quieter
+    # but still meaningful transients later in a long file.
+    rel_base = float(np.percentile(active, 95))
+    rel_threshold = max(
+        (0.2 + 0.3 * sensitivity) * max_nov,
+        (0.3 + 0.7 * sensitivity) * rel_base,
+    )
+
+    # Require each accepted frame to be a local maximum within ±2 frames.
+    neighbor = max(1, int(round(0.015 * sr / hop)))
+    padded = np.pad(novelty, neighbor, mode="constant", constant_values=0.0)
+    is_local_max = np.ones(len(novelty), dtype=bool)
+    for offset in range(-neighbor, neighbor + 1):
+        if offset == 0:
+            continue
+        shifted = padded[neighbor + offset: neighbor + offset + len(novelty)]
+        is_local_max &= novelty >= shifted
 
     min_gap_frames = max(1, int(round(min_gap_sec * sr / hop)))
 
-    onsets: list[float] = []
+    candidate_frames: list[tuple[int, float]] = []
     last_frame = -min_gap_frames
     for i, val in enumerate(novelty):
-        if val > threshold and (i - last_frame) >= min_gap_frames:
-            onsets.append(float(i * hop) / sr)
+        threshold = max(float(adaptive_threshold[i]), rel_threshold)
+        if val > threshold and is_local_max[i] and (i - last_frame) >= min_gap_frames:
+            candidate_frames.append((i, float(val)))
             last_frame = i
 
-    return onsets
+    # Safety cap: keep the strongest peaks if the list is unreasonable, but scale
+    # with duration so full songs are not limited to a tiny fixed marker count.
+    duration = float(mono.size) / sr
+    max_onsets = max(32, min(512, int(duration * 8.0)))
+    if len(candidate_frames) > max_onsets:
+        candidate_frames.sort(key=lambda x: x[1], reverse=True)
+        candidate_frames = candidate_frames[:max_onsets]
+        candidate_frames.sort(key=lambda x: x[0])
+
+    return [float(i * hop) / sr for i, _val in candidate_frames]
 
 
 def normalize_peak(buf: np.ndarray, target_db: float = -0.3) -> np.ndarray:

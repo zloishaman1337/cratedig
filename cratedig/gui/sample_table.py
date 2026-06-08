@@ -23,6 +23,18 @@ _COLUMNS = ("Filename", "Class", "Category", "BPM", "Key", "SR", "Tags", "Durati
 
 _SIM_COL = _COLUMNS.index("Similarity")
 _FNAME_COL = _COLUMNS.index("Filename")
+_TAGS_COL = _COLUMNS.index("Tags")
+
+_COLUMN_WIDTHS = {
+    "Class": 74,
+    "Category": 76,
+    "BPM": 64,
+    "Key": 92,
+    "SR": 64,
+    "Tags": 90,
+    "Duration": 72,
+    "Similarity": 92,
+}
 
 
 def _fmt_duration(sec: float | None) -> str:
@@ -92,6 +104,8 @@ class SampleTable(QWidget):
     reveal_requested = Signal(object)
     add_to_crate_requested = Signal(object, int)
     create_crate_requested = Signal(object, str)
+    set_ab_a_requested = Signal(int)   # carries sample.id
+    set_ab_b_requested = Signal(int)   # carries sample.id
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -106,11 +120,21 @@ class SampleTable(QWidget):
         self._table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self._table.setDragEnabled(True)
         self._table.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
-        self._table.horizontalHeader().setStretchLastSection(False)
-        self._table.horizontalHeader().setSectionResizeMode(_FNAME_COL, QHeaderView.ResizeMode.Stretch)
+        header = self._table.horizontalHeader()
+        header.setStretchLastSection(False)
+        header.setMinimumSectionSize(44)
+        for col, name in enumerate(_COLUMNS):
+            if col == _FNAME_COL:
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Stretch)
+                self._table.setColumnWidth(col, 240)
+            else:
+                header.setSectionResizeMode(col, QHeaderView.ResizeMode.Fixed)
+                self._table.setColumnWidth(col, _COLUMN_WIDTHS.get(name, 80))
         self._table.verticalHeader().setVisible(False)
 
         self._table.setItemDelegateForColumn(_SIM_COL, SimilarityBarDelegate(self._table))
+        self._table.setColumnHidden(_TAGS_COL, True)
+        self._table.setColumnHidden(_SIM_COL, True)
 
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_context_menu)
@@ -134,6 +158,7 @@ class SampleTable(QWidget):
         self._samples = list(samples)
         self._tags_by_id = tags_by_id if tags_by_id is not None else {}
         self._table.blockSignals(True)
+        self._table.setColumnHidden(_SIM_COL, scores is None)
         self._table.setRowCount(len(self._samples))
 
         for row, s in enumerate(self._samples):
@@ -170,7 +195,7 @@ class SampleTable(QWidget):
             self._table.setItem(row, _SIM_COL, sim_item)
 
         self._table.blockSignals(False)
-        self._table.setColumnWidth(_SIM_COL, 110)
+        self._table.setColumnWidth(_SIM_COL, _COLUMN_WIDTHS["Similarity"])
 
     def _on_cell_changed(self, current_row: int, _cc: int, _pr: int, _pc: int) -> None:
         if 0 <= current_row < len(self._samples):
@@ -203,4 +228,7 @@ class SampleTable(QWidget):
         menu.addAction("Move…").triggered.connect(lambda: self.move_requested.emit(sample))
         menu.addAction("Delete").triggered.connect(lambda: self.delete_requested.emit(sample))
         menu.addAction("Reveal in Explorer").triggered.connect(lambda: self.reveal_requested.emit(sample))
+        menu.addSeparator()
+        menu.addAction("Set as A").triggered.connect(lambda: self.set_ab_a_requested.emit(sample.id))
+        menu.addAction("Set as B").triggered.connect(lambda: self.set_ab_b_requested.emit(sample.id))
         menu.exec(self._table.viewport().mapToGlobal(pos))
