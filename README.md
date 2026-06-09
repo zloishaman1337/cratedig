@@ -232,8 +232,11 @@ crate*) и отмечайте **избранное** звёздочкой. И т
 
 ---
 
-## Лицензия и благодарности
+## Лицензия и особенности
 
 Форк для личного использования, вдохновлённый Sononym. Включает ffmpeg/ffplay
-(проект FFmpeg) и построен на PySide6, librosa, yt-dlp и других. Технические детали
-см. в `README.dev.md` / `ARCHITECTURE.md`.
+(проект FFmpeg) и построен на PySide6, librosa, yt-dlp и других.
+
+## Contributors
+
+Отдельная благодарность [@OatmillerTools](https://github.com/OatmillerTools) за помощь в разработке бэкенда ALS Explorer модуля и ценный вклад в проект. Оригинальный [Project-Checker-Live](https://github.com/OatmillerTools/Project-Checker-Live)
