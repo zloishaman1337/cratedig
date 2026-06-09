@@ -45,6 +45,7 @@ class IndexWorker(QObject):
         self._db = db
         self._cfg = cfg
         self._dm = None  # lazy DownloadManager (imports source backends)
+        self._last_search_seq = 0  # seq of the most recent search, reused by metadata refresh
 
     def _manager(self):
         """Lazily build the DownloadManager (backend imports are heavyweight)."""
@@ -86,6 +87,14 @@ class IndexWorker(QObject):
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("reload", str(exc))
 
+    @Slot(str)
+    def request_touch_recent_folder(self, path: str) -> None:
+        """Record a folder visit in the recent_folders DB table."""
+        try:
+            self._db.touch_recent_folder(path)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("touch_recent_folder", str(exc))
+
     @Slot(int)
     def request_toggle_favorite(self, sample_id: int) -> None:
         """Toggle a sample's favorite state in the DB, then reload the tree."""
@@ -124,6 +133,7 @@ class IndexWorker(QObject):
     @Slot(int)
     def request_delete(self, sample_id: int) -> None:
         """Trash the sample file and remove it from the DB, then reload."""
+        from PySide6.QtCore import QSettings as _QSettings
         try:
             sample = self._db.get_sample(sample_id)
             if sample is not None:
@@ -131,7 +141,11 @@ class IndexWorker(QObject):
                     getattr(sample, "source", None) == "edit"
                     or _is_saved_sample_path(sample.path, self._cfg.paths.saved_dir)
                 )
-                if is_saved:
+                _settings = _QSettings("cratedig", "cratedig")
+                recycle_for_saved = _settings.value(
+                    "safety/recycle_bin_for_saved", True, type=bool
+                )
+                if is_saved and not recycle_for_saved:
                     Path(sample.path).unlink(missing_ok=True)
                 else:
                     files.trash_file(sample.path)
@@ -385,6 +399,7 @@ class IndexWorker(QObject):
     @Slot(int, str, str, int)
     def request_search(self, seq: int, query: str, mode: str, limit: int) -> None:
         """Search source backends for a query; emit hits tagged with seq."""
+        self._last_search_seq = seq
         try:
             def _progress(phase: str) -> None:
                 self.searchProgress.emit(seq, phase)
@@ -419,19 +434,19 @@ class IndexWorker(QObject):
 
     @Slot()
     def request_refresh_metadata(self) -> None:
-        """Re-query metadata cache for the current download results.
+        """Re-query metadata providers for the current download results with force_live=True.
 
-        The manager caches enrichment keyed by hit title/artist; calling
-        search_metadata_cache is a fast in-DB lookup with no network I/O.
-        Emits downloadDone(True, 'metadata refreshed') so the pane updates.
+        Emits searchReady with re-ranked hits so the download pane updates its list,
+        then emits downloadDone(True, 'metadata refreshed') for status feedback.
         """
         try:
             mgr = self._manager()
             if hasattr(mgr, "refresh_metadata_cache"):
-                mgr.refresh_metadata_cache()
+                hits = mgr.refresh_metadata_cache()
+                if hits:
+                    self.searchReady.emit(self._last_search_seq, hits, "metadata refreshed")
                 self.downloadDone.emit(True, "metadata refreshed")
             else:
-                # Honest signal: no refresh path wired yet (avoid false success).
                 self.failed.emit("refresh_metadata", "metadata refresh not available")
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("refresh_metadata", str(exc))

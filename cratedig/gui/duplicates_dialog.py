@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from PySide6.QtCore import Signal
+from PySide6.QtCore import QSettings, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QDialog,
@@ -173,21 +173,27 @@ class DuplicatesDialog(QDialog):
         if not plan.remove:
             return
 
-        n_remove = len(plan.remove)
-        n_protected = len(plan.protected)
+        _settings = QSettings("cratedig", "cratedig")
+        confirm = _settings.value("safety/confirm_dup_resolver_deletes", True, type=bool)
 
-        msg = f"This will remove {n_remove} file(s)."
-        if n_protected:
-            msg += (
-                f"\n\nWarning: {n_protected} of them are generated edits that will be "
-                "PERMANENTLY deleted (not sent to the recycle bin)."
+        if confirm:
+            n_remove = len(plan.remove)
+            n_protected = len(plan.protected)
+
+            msg = f"This will remove {n_remove} file(s)."
+            if n_protected:
+                msg += (
+                    f"\n\nWarning: {n_protected} of them are generated edits that will be "
+                    "PERMANENTLY deleted (not sent to the recycle bin)."
+                )
+
+            answer = QMessageBox.question(
+                self,
+                "Confirm resolution",
+                msg,
+                QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
             )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
 
-        answer = QMessageBox.question(
-            self,
-            "Confirm resolution",
-            msg,
-            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No,
-        )
-        if answer == QMessageBox.StandardButton.Yes:
-            self._perform_resolution(gi)
+        self._perform_resolution(gi)

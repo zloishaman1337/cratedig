@@ -442,6 +442,7 @@ class AudioPlayer:
         start_sec: float | None = None,
         duration_sec: float | None = None,
         loop: bool = False,
+        gain_db: float | None = None,
     ) -> None:
         ffplay = shutil.which("ffplay")
         if not ffplay:
@@ -454,6 +455,8 @@ class AudioPlayer:
             cmd += ["-t", f"{duration_sec:.3f}"]
         if loop:
             cmd += ["-loop", "0"]
+        if gain_db is not None and gain_db != 0.0:
+            cmd += ["-af", f"volume={gain_db}dB"]
         cmd.append(str(target))
         self._proc = subprocess.Popen(
             cmd,

@@ -344,3 +344,39 @@ class TestSimplerPaneSlice:
             actual_start, actual_end = regions_visited[i]
             assert pytest.approx(actual_start, abs=0.05) == expected_start
             assert pytest.approx(actual_end, abs=0.05) == expected_end
+
+
+class TestKnobDial:
+    """_KnobDial must never jump to the clicked angle; double-click resets to default."""
+
+    def _knob(self):
+        _app()
+        from cratedig.gui.simpler_pane import _Knob, _KnobDial
+
+        knob = _Knob("Gain", -24.0, 24.0, 0.5, 0.0, " dB")
+        knob.resize(60, 80)
+        knob.show()
+        assert isinstance(knob._dial, _KnobDial)
+        return knob
+
+    def test_single_click_does_not_jump_to_cursor(self):
+        from PySide6.QtCore import Qt, QPoint
+        from PySide6.QtTest import QTest
+
+        knob = self._knob()
+        knob.setValue(12.0)
+        corner = QPoint(knob._dial.width() - 2, 2)  # native QDial would slam toward an extreme
+        QTest.mouseClick(knob._dial, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, corner)
+
+        assert pytest.approx(knob.value(), abs=0.01) == 12.0
+
+    def test_double_click_resets_to_default(self):
+        from PySide6.QtCore import Qt, QPoint
+        from PySide6.QtTest import QTest
+
+        knob = self._knob()
+        knob.setValue(12.0)
+        corner = QPoint(knob._dial.width() - 2, 2)
+        QTest.mouseDClick(knob._dial, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, corner)
+
+        assert pytest.approx(knob.value(), abs=0.01) == knob._default == 0.0

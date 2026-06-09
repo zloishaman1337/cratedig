@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, Qt, QUrl, Signal
+from PySide6.QtCore import QByteArray, QMimeData, QSettings, Qt, QUrl, Signal
 from PySide6.QtGui import QColor
 from PySide6.QtWidgets import (
     QAbstractItemView,
@@ -18,6 +18,7 @@ from PySide6.QtWidgets import (
 
 from ..db.models import Sample
 from .logic import file_urls, filename_parts, similar_name
+from .settings_tabs import _keys
 
 _COLUMNS = ("Filename", "Class", "Category", "BPM", "Key", "SR", "Tags", "Duration", "Similarity")
 
@@ -104,11 +105,10 @@ class SampleTable(QWidget):
     reveal_requested = Signal(object)
     add_to_crate_requested = Signal(object, int)
     create_crate_requested = Signal(object, str)
-    set_ab_a_requested = Signal(int)   # carries sample.id
-    set_ab_b_requested = Signal(int)   # carries sample.id
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, settings: QSettings | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._settings = settings
         self._samples: list[Sample] = []
         self._tags_by_id: dict[int, list[str]] = {}
         self._crates: list = []
@@ -133,8 +133,14 @@ class SampleTable(QWidget):
         self._table.verticalHeader().setVisible(False)
 
         self._table.setItemDelegateForColumn(_SIM_COL, SimilarityBarDelegate(self._table))
-        self._table.setColumnHidden(_TAGS_COL, True)
+
+        # Tags column: default visible (True) unless pref says otherwise
+        show_tags = self._read_bool(_keys.SHOW_TAGS_COLUMN, _keys.DEFAULTS[_keys.SHOW_TAGS_COLUMN])
+        self._table.setColumnHidden(_TAGS_COL, not show_tags)
         self._table.setColumnHidden(_SIM_COL, True)
+
+        # Restore saved column state if prefs say so
+        self._restore_column_state()
 
         self._table.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
         self._table.customContextMenuRequested.connect(self._on_context_menu)
@@ -144,6 +150,51 @@ class SampleTable(QWidget):
         layout.addWidget(self._table)
 
         self._table.currentCellChanged.connect(self._on_cell_changed)
+
+        # Connect persistence signals
+        header.sectionResized.connect(self._on_section_resized)
+        header.sectionMoved.connect(self._on_section_moved)
+
+    # --- settings helpers ---------------------------------------------------
+
+    def _read_bool(self, key: str, default: object) -> bool:
+        if self._settings is None:
+            return bool(default)
+        return self._settings.value(key, default, type=bool)
+
+    def _restore_column_state(self) -> None:
+        if self._settings is None:
+            return
+        header = self._table.horizontalHeader()
+        if self._read_bool(_keys.REMEMBER_COLUMN_WIDTHS, _keys.DEFAULTS[_keys.REMEMBER_COLUMN_WIDTHS]):
+            saved = self._settings.value("browser/column_widths")
+            if isinstance(saved, QByteArray) and not saved.isEmpty():
+                header.restoreState(saved)
+
+    def save_column_state(self) -> None:
+        """Persist header state to QSettings (called from MainWindow.closeEvent)."""
+        if self._settings is None:
+            return
+        if self._read_bool(_keys.REMEMBER_COLUMN_WIDTHS, _keys.DEFAULTS[_keys.REMEMBER_COLUMN_WIDTHS]):
+            self._settings.setValue("browser/column_widths", self._table.horizontalHeader().saveState())
+
+    def set_tags_visible(self, visible: bool) -> None:
+        """Show or hide the Tags column live."""
+        self._table.setColumnHidden(_TAGS_COL, not visible)
+
+    def _on_section_resized(self, _logical: int, _old: int, _new: int) -> None:
+        if self._settings is None:
+            return
+        if self._read_bool(_keys.REMEMBER_COLUMN_WIDTHS, _keys.DEFAULTS[_keys.REMEMBER_COLUMN_WIDTHS]):
+            self._settings.setValue("browser/column_widths", self._table.horizontalHeader().saveState())
+
+    def _on_section_moved(self, _logical: int, _old: int, _new: int) -> None:
+        if self._settings is None:
+            return
+        if self._read_bool(_keys.REMEMBER_COLUMN_WIDTHS, _keys.DEFAULTS[_keys.REMEMBER_COLUMN_WIDTHS]):
+            self._settings.setValue("browser/column_widths", self._table.horizontalHeader().saveState())
+
+    # --- public API ---------------------------------------------------------
 
     def set_crates(self, crates) -> None:
         self._crates = list(crates)
@@ -228,7 +279,4 @@ class SampleTable(QWidget):
         menu.addAction("Move…").triggered.connect(lambda: self.move_requested.emit(sample))
         menu.addAction("Delete").triggered.connect(lambda: self.delete_requested.emit(sample))
         menu.addAction("Reveal in Explorer").triggered.connect(lambda: self.reveal_requested.emit(sample))
-        menu.addSeparator()
-        menu.addAction("Set as A").triggered.connect(lambda: self.set_ab_a_requested.emit(sample.id))
-        menu.addAction("Set as B").triggered.connect(lambda: self.set_ab_b_requested.emit(sample.id))
         menu.exec(self._table.viewport().mapToGlobal(pos))

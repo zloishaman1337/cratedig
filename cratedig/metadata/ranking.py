@@ -24,6 +24,7 @@ def rank_track_hits(
     providers: dict,
     query: str,
     hits: list[SearchHit],
+    force_live: bool = False,
 ) -> list[SearchHit]:
     if not db or not hits:
         return hits
@@ -34,8 +35,8 @@ def rank_track_hits(
     ranked: list[tuple[float, int, SearchHit]] = []
     for idx, hit in enumerate(hits):
         q = _query_for_hit(query, hit)
-        allow_live = live_allowed and idx < max_live_hits and _query_is_specific(q)
-        record = _lookup_best(db, metadata_cfg, providers, q, ttl_days, allow_live)
+        allow_live = force_live or (live_allowed and idx < max_live_hits and _query_is_specific(q))
+        record = _lookup_best(db, metadata_cfg, providers, q, ttl_days, allow_live, force_live=force_live)
         score = _score(hit, record)
         if record is not None:
             _apply_metadata(hit, record, score)
@@ -61,12 +62,13 @@ def _lookup_best(
     q: MetadataQuery,
     ttl_days: int,
     allow_live: bool,
+    force_live: bool = False,
 ) -> MetadataRecord | None:
     records: list[MetadataRecord] = []
     query_norm = normalize_query(q)
     for name, cls in providers.items():
         cached = db.get_metadata_cache(name, query_norm)
-        if cached and not _is_stale(cached.fetched_at, ttl_days):
+        if cached and not _is_stale(cached.fetched_at, ttl_days) and not force_live:
             record = _record_from_cache(cached)
             if record is not None:
                 records.append(record)

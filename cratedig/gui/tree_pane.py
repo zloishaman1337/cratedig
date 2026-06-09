@@ -77,7 +77,7 @@ class TreePane(QWidget):
         scan_btn.clicked.connect(self.scan_requested)
         analyze_btn.clicked.connect(self.analyze_requested)
 
-    def set_rows(self, rows: list[tuple]) -> None:
+    def set_rows(self, rows: list[tuple], expand: bool = True) -> None:
         """Rebuild the tree from tree_rows() output."""
         self._tree.blockSignals(True)
         self._tree.clear()
@@ -99,8 +99,21 @@ class TreePane(QWidget):
 
             item_map[key] = item
 
-        self._tree.expandAll()
+        if expand:
+            self._tree.expandAll()
         self._tree.blockSignals(False)
+
+    def select_key(self, key: str) -> bool:
+        """Programmatically select the tree item with the given key; return True on match."""
+        it = self._tree.invisibleRootItem()
+        stack = [it.child(i) for i in range(it.childCount())]
+        while stack:
+            item = stack.pop()
+            if item.data(0, _KEY_ROLE) == key:
+                self._tree.setCurrentItem(item)
+                return True
+            stack.extend(item.child(i) for i in range(item.childCount()))
+        return False
 
     def set_crate_paths(self, crate_paths_by_id: dict[int, list[str]]) -> None:
         self._tree.set_crate_paths(crate_paths_by_id)

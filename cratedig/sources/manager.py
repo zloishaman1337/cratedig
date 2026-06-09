@@ -42,6 +42,9 @@ class DownloadManager:
         self.strategy = s.get("strategy", "combined")
         self.default = s.get("default", "youtube")
         self.order = s.get("order", ["youtube", "yandex", "archive"])
+        self._last_query: str | None = None
+        self._last_mode: str | None = None
+        self._last_hits: list[SearchHit] = []
 
     # --- backend instantiation -------------------------------------------------
     def _make(self, name: str) -> Downloader | None:
@@ -98,6 +101,9 @@ class DownloadManager:
                     all_hits.extend(hits)
                     used_names.append(name)
                     continue
+                self._last_query = query
+                self._last_mode = mode
+                self._last_hits = list(hits)
                 return hits, name
         if all_hits:
             if mode == "tracks":
@@ -106,9 +112,21 @@ class DownloadManager:
                 all_hits = rank_track_hits(
                     self.db, self.cfg.metadata, PROVIDERS, query, all_hits
                 )
+            self._last_query = query
+            self._last_mode = mode
+            self._last_hits = list(all_hits)
             return all_hits, "+".join(used_names)
         used = last_err or (order[-1] if order else "")
         return [], used
+
+    def refresh_metadata_cache(self) -> list[SearchHit]:
+        if not self._last_hits:
+            return []
+        ranked = rank_track_hits(
+            self.db, self.cfg.metadata, PROVIDERS, self._last_query or "", self._last_hits, force_live=True
+        )
+        self._last_hits = list(ranked)
+        return ranked
 
     # --- download by hit ------------------------------------------------------
     def fetch_hit(

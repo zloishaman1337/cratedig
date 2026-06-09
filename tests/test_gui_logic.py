@@ -1049,7 +1049,7 @@ class TestSampleTable:
         sim_col = headers.index("Similarity")
 
         assert table._table.horizontalHeader().sectionResizeMode(fname_col).name == "Stretch"
-        assert table._table.isColumnHidden(tags_col)
+        assert not table._table.isColumnHidden(tags_col)  # Tags now visible by default
         assert table._table.isColumnHidden(sim_col)
 
         table.set_samples([Sample(id=1, path="/packs/a.wav", filename="a.wav")], scores={1: 0.5})
@@ -1134,43 +1134,106 @@ def test_tree_rows_root_saved_file_uses_mtime_date(tmp_path):
 def test_worker_delete_saved_file_unlinks_when_send2trash_missing(tmp_path, monkeypatch):
     pytest.importorskip("PySide6")
     from types import SimpleNamespace
+    from PySide6.QtCore import QSettings
     from cratedig.db import Database
     from cratedig.gui.worker import IndexWorker
 
-    fp = tmp_path / "edit.wav"
-    fp.write_text("x")
-    db = Database(tmp_path / "s.db")
-    sid = db.upsert_sample(Sample(id=None, path=str(fp), filename=fp.name, source="edit"))
-    monkeypatch.setattr("cratedig.files.send2trash", lambda _path: pytest.fail("saved files should unlink directly"))
+    # Set recycle_bin_for_saved to False so unlink path is exercised
+    _s = QSettings("cratedig", "cratedig")
+    _s.setValue("safety/recycle_bin_for_saved", False)
+    _s.sync()
 
-    cfg = SimpleNamespace(paths=SimpleNamespace(library_dirs=(), saved_dir=tmp_path))
-    IndexWorker(db, cfg).request_delete(sid)
+    try:
+        fp = tmp_path / "edit.wav"
+        fp.write_text("x")
+        db = Database(tmp_path / "s.db")
+        sid = db.upsert_sample(Sample(id=None, path=str(fp), filename=fp.name, source="edit"))
+        monkeypatch.setattr("cratedig.files.send2trash", lambda _path: pytest.fail("saved files should unlink directly"))
 
-    assert not fp.exists()
-    assert db.get_sample(sid) is None
-    db.close()
+        cfg = SimpleNamespace(paths=SimpleNamespace(library_dirs=(), saved_dir=tmp_path))
+        IndexWorker(db, cfg).request_delete(sid)
+
+        assert not fp.exists()
+        assert db.get_sample(sid) is None
+        db.close()
+    finally:
+        _s.remove("safety/recycle_bin_for_saved")
+        _s.sync()
 
 
 def test_worker_delete_file_inside_saved_dir_unlinks_even_if_source_is_local(tmp_path, monkeypatch):
     pytest.importorskip("PySide6")
     from types import SimpleNamespace
+    from PySide6.QtCore import QSettings
     from cratedig.db import Database
     from cratedig.gui.worker import IndexWorker
 
-    saved_dir = tmp_path / "_saved"
-    saved_dir.mkdir()
-    fp = saved_dir / "legacy.wav"
-    fp.write_text("x")
-    db = Database(tmp_path / "s.db")
-    sid = db.upsert_sample(Sample(id=None, path=str(fp), filename=fp.name, source="local"))
-    monkeypatch.setattr("cratedig.files.send2trash", lambda _path: pytest.fail("saved-dir files should unlink directly"))
+    # Set recycle_bin_for_saved to False so unlink path is exercised for saved-dir files
+    _s = QSettings("cratedig", "cratedig")
+    _s.setValue("safety/recycle_bin_for_saved", False)
+    _s.sync()
 
-    cfg = SimpleNamespace(paths=SimpleNamespace(library_dirs=(), saved_dir=saved_dir))
-    IndexWorker(db, cfg).request_delete(sid)
+    try:
+        saved_dir = tmp_path / "_saved"
+        saved_dir.mkdir()
+        fp = saved_dir / "legacy.wav"
+        fp.write_text("x")
+        db = Database(tmp_path / "s.db")
+        sid = db.upsert_sample(Sample(id=None, path=str(fp), filename=fp.name, source="local"))
+        monkeypatch.setattr("cratedig.files.send2trash", lambda _path: pytest.fail("saved-dir files should unlink directly"))
 
-    assert not fp.exists()
-    assert db.get_sample(sid) is None
-    db.close()
+        cfg = SimpleNamespace(paths=SimpleNamespace(library_dirs=(), saved_dir=saved_dir))
+        IndexWorker(db, cfg).request_delete(sid)
+
+        assert not fp.exists()
+        assert db.get_sample(sid) is None
+        db.close()
+    finally:
+        _s.remove("safety/recycle_bin_for_saved")
+        _s.sync()
+
+
+def test_worker_delete_saved_file_trashes_by_default(tmp_path, monkeypatch):
+    """With default recycle_bin_for_saved=True, saved files go to trash via send2trash."""
+    pytest.importorskip("PySide6")
+    from types import SimpleNamespace
+    from PySide6.QtCore import QSettings
+    from cratedig.db import Database
+    from cratedig.gui.worker import IndexWorker
+
+    # Ensure recycle key is NOT set to get the default (True)
+    _s = QSettings("cratedig", "cratedig")
+    _s.remove("safety/recycle_bin_for_saved")
+    _s.sync()
+
+    try:
+        fp = tmp_path / "edit.wav"
+        fp.write_text("x")
+        db = Database(tmp_path / "s.db")
+        sid = db.upsert_sample(Sample(id=None, path=str(fp), filename=fp.name, source="edit"))
+
+        # Record calls to send2trash to verify it was invoked (not unlink)
+        trash_calls = []
+        def mock_send2trash(path):
+            trash_calls.append(path)
+            # Actually delete the file so DB delete succeeds
+            import pathlib
+            pathlib.Path(path).unlink(missing_ok=True)
+        monkeypatch.setattr("cratedig.files.send2trash", mock_send2trash)
+
+        cfg = SimpleNamespace(paths=SimpleNamespace(library_dirs=(), saved_dir=tmp_path))
+        IndexWorker(db, cfg).request_delete(sid)
+
+        # File should be deleted (via trash mock)
+        assert not fp.exists()
+        assert db.get_sample(sid) is None
+        # Verify send2trash was called (not direct unlink)
+        assert len(trash_calls) == 1
+        assert str(fp) in trash_calls[0]
+        db.close()
+    finally:
+        _s.remove("safety/recycle_bin_for_saved")
+        _s.sync()
 
 
 def test_main_window_refreshes_current_tree_table_after_reload():
@@ -1291,11 +1354,17 @@ def test_settings_dialog_exposes_auto_preview_toggle(tmp_path):
     values = []
     dialog.auto_preview_changed.connect(lambda checked: values.append(checked))
 
-    assert dialog._auto_preview.isChecked() is False
-    dialog.set_auto_preview_enabled(True)
+    # Access auto-preview checkbox via the preferences tab (dialog has _prefs_tab)
+    assert dialog._prefs_tab._auto_preview.isChecked() is False
 
-    assert dialog._auto_preview.isChecked() is True
-    assert values == [True]
+    # set_auto_preview_enabled blocks signals, so it doesn't emit
+    dialog.set_auto_preview_enabled(True)
+    assert dialog._prefs_tab._auto_preview.isChecked() is True
+    assert values == []  # No emission (signals blocked)
+
+    # Now toggle via user action to verify signal is emitted
+    dialog._prefs_tab._auto_preview.setChecked(False)
+    assert values == [False]
 
 
 class TestSimplerPane:
@@ -2297,3 +2366,137 @@ class TestWorkerPreviewRender:
         assert hasattr(pane, "exported")
         signal = getattr(pane, "exported")
         assert isinstance(signal, Signal)
+
+
+class TestABLevelGainDb:
+    """Test ab_level_gain_db(active_loudness, other_loudness) -> float for A/B leveling."""
+
+    def test_active_quieter_than_other_returns_positive_gain(self):
+        """When active is quieter, return positive gain to match the louder (other)."""
+        from cratedig.gui.logic import ab_level_gain_db
+
+        active = 0.5
+        other = 1.0
+        result = ab_level_gain_db(active, other)
+
+        # Gain should boost active to match other
+        # level_gain_db(other, active) = 20*log10(1.0/0.5) = 20*log10(2) ~= 6.02
+        assert result == pytest.approx(6.02, abs=0.1)
+        assert result > 0.0
+
+    def test_active_louder_than_other_returns_zero(self):
+        """When active is louder, return 0.0 (no change; active IS the reference)."""
+        from cratedig.gui.logic import ab_level_gain_db
+
+        active = 1.0
+        other = 0.5
+        result = ab_level_gain_db(active, other)
+
+        assert result == pytest.approx(0.0)
+
+    def test_equal_loudness_returns_zero(self):
+        """When both are equal, return 0.0."""
+        from cratedig.gui.logic import ab_level_gain_db
+
+        result = ab_level_gain_db(1.0, 1.0)
+        assert result == pytest.approx(0.0)
+
+    def test_active_zero_returns_zero_gracefully(self):
+        """When active is 0.0, guard against ValueError and return 0.0."""
+        from cratedig.gui.logic import ab_level_gain_db
+
+        result = ab_level_gain_db(0.0, 1.0)
+        assert result == pytest.approx(0.0)
+
+    def test_other_zero_returns_zero_gracefully(self):
+        """When other is 0.0, guard against ValueError and return 0.0."""
+        from cratedig.gui.logic import ab_level_gain_db
+
+        result = ab_level_gain_db(1.0, 0.0)
+        assert result == pytest.approx(0.0)
+
+    def test_active_negative_returns_zero_gracefully(self):
+        """When active is negative, guard against ValueError and return 0.0."""
+        from cratedig.gui.logic import ab_level_gain_db
+
+        result = ab_level_gain_db(-0.5, 1.0)
+        assert result == pytest.approx(0.0)
+
+    def test_other_negative_returns_zero_gracefully(self):
+        """When other is negative, guard against ValueError and return 0.0."""
+        from cratedig.gui.logic import ab_level_gain_db
+
+        result = ab_level_gain_db(1.0, -0.5)
+        assert result == pytest.approx(0.0)
+
+
+class TestShouldPreviewHit:
+    """Test should_preview_hit(hit) -> bool guard for auto-preview-on-row-select."""
+
+    def test_hit_with_preview_in_extra_returns_true(self):
+        """A SearchHit with preview in extra['preview'] should return True."""
+        from cratedig.gui.logic import should_preview_hit
+
+        hit = SearchHit(
+            backend="freesound",
+            id="123",
+            title="Kick",
+            extra={"preview": "https://example.com/kick.mp3"}
+        )
+
+        assert should_preview_hit(hit) is True
+
+    def test_hit_with_preview_url_in_extra_returns_true(self):
+        """A SearchHit with preview_url in extra['preview_url'] should return True."""
+        from cratedig.gui.logic import should_preview_hit
+
+        hit = SearchHit(
+            backend="freesound",
+            id="123",
+            title="Kick",
+            extra={"preview_url": "https://example.com/kick.mp3"}
+        )
+
+        assert should_preview_hit(hit) is True
+
+    def test_hit_without_preview_returns_false(self):
+        """A SearchHit with no preview in extra should return False."""
+        from cratedig.gui.logic import should_preview_hit
+
+        hit = SearchHit(
+            backend="freesound",
+            id="123",
+            title="Kick",
+            extra={}
+        )
+
+        assert should_preview_hit(hit) is False
+
+    def test_hit_with_empty_preview_returns_false(self):
+        """A SearchHit with empty preview string should return False."""
+        from cratedig.gui.logic import should_preview_hit
+
+        hit = SearchHit(
+            backend="freesound",
+            id="123",
+            title="Kick",
+            extra={"preview": ""}
+        )
+
+        assert should_preview_hit(hit) is False
+
+    def test_object_with_truthy_preview_url_returns_true(self):
+        """An object with truthy preview_url property should return True."""
+        from types import SimpleNamespace
+        from cratedig.gui.logic import should_preview_hit
+
+        obj = SimpleNamespace(preview_url=lambda: "https://example.com/sound.mp3")
+        assert should_preview_hit(obj) is True
+
+    def test_object_with_none_preview_url_returns_false(self):
+        """An object with None preview_url property should return False."""
+        from types import SimpleNamespace
+        from cratedig.gui.logic import should_preview_hit
+
+        obj = SimpleNamespace(preview_url=lambda: None)
+        assert should_preview_hit(obj) is False

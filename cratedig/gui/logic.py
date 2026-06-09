@@ -2,12 +2,15 @@
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 from datetime import datetime
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 import numpy as np
+
+from cratedig.audio.playback import level_gain_db
 
 if TYPE_CHECKING:
     from cratedig.db.models import Sample
@@ -314,6 +317,32 @@ def match_als_samples(names: list[str], index: dict) -> dict:
                 unresolved.append(name)
 
     return {"found": found, "candidates": candidates, "unresolved": unresolved}
+
+
+def ab_level_gain_db(active_loudness: float, other_loudness: float) -> float:
+    """Return the dB gain to bring the active slot up to the louder reference.
+
+    If active >= other, return 0.0 (active is already the reference or equal).
+    Guards against non-positive or non-finite inputs by returning 0.0.
+    """
+    if (
+        not math.isfinite(active_loudness)
+        or not math.isfinite(other_loudness)
+        or active_loudness <= 0
+        or other_loudness <= 0
+    ):
+        return 0.0
+    if active_loudness >= other_loudness:
+        return 0.0
+    return level_gain_db(other_loudness, active_loudness)
+
+
+def should_preview_hit(hit) -> bool:
+    """Return True if the hit has a usable preview URL."""
+    attr = getattr(hit, "preview_url", None)
+    if callable(attr):
+        return bool(attr())
+    return bool(attr)
 
 
 def hit_rows(hits: list["SearchHit"]) -> list[tuple[str, str, str, str, str, str]]:

@@ -2,12 +2,11 @@
 
 from __future__ import annotations
 
-import os
-import subprocess
+import re
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QMetaObject, QSettings, QThread, QTimer, Qt, Q_ARG, Signal
+from PySide6.QtCore import QByteArray, QMetaObject, QSettings, QThread, QTimer, Qt, Q_ARG, Signal
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
@@ -31,18 +30,20 @@ from ..db.database import Database
 from ..audio.features import ASPECTS
 from ..audio.editor import render_edit  # noqa: F401 — monkeypatch hook; preview renders on the worker thread
 from .download_pane import DownloadPane
-from ..audio.playback import level_gain_db
-from .logic import ABState, filename_parts, is_sample_favorite, tree_rows
+from .logic import filename_parts, is_sample_favorite, tree_rows
 from .metadata_panel import MetadataPanel
 from .player import Player
 from .sample_table import SampleTable
 from .settings_dialog import SettingsDialog
+from .settings_tabs import _keys
+from .toast import ToastManager
 from .tag_editor import TagEditor
 from .tree_pane import TreePane
 from .simpler_pane import SimplerPane
 from .worker import IndexWorker
 from .als_explorer import AlsExplorerPanel
 from .health_panel import HealthPanel
+from .platform_files import reveal_in_file_manager
 
 
 class MainWindow(QMainWindow):
@@ -76,6 +77,7 @@ class MainWindow(QMainWindow):
         self._preview_seq = 0
         self._preview_pending_params: dict = {}
         self._search_seq = 0
+        self._als_match_actions_wired = False  # connect ALS match-row actions once
         self._similar_seq = 0
         self._preview_edit_playing = False
         self._preview_started_at = 0.0
@@ -84,18 +86,28 @@ class MainWindow(QMainWindow):
         self._preview_reverse = False
         self._preview_loop = False
         self._settings = QSettings("cratedig", "cratedig")
+        self._player.apply_loudness_leveling = self._settings.value(
+            _keys.AB_LOUDNESS_LEVELING,
+            _keys.DEFAULTS[_keys.AB_LOUDNESS_LEVELING],
+            type=bool,
+        )
         self._auto_preview_on_select = self._settings.value(
-            "playback/auto_preview_on_select",
-            True,
+            _keys.AUTO_PREVIEW_ON_SELECT,
+            _keys.DEFAULTS[_keys.AUTO_PREVIEW_ON_SELECT],
             type=bool,
         )
         self._settings_dialog: SettingsDialog | None = None
-        self._ab_state = ABState(slot_a=None, slot_b=None, current='a')
         self._als_match_seq = 0
 
         # --- build panes ---
+        expand_tree = self._settings.value(
+            _keys.EXPAND_TREE_ON_LOAD,
+            _keys.DEFAULTS[_keys.EXPAND_TREE_ON_LOAD],
+            type=bool,
+        )
+        self._expand_tree_on_load = expand_tree
         self._tree_pane = TreePane()
-        self._sample_table = SampleTable()
+        self._sample_table = SampleTable(settings=self._settings)
         self._simpler_pane = SimplerPane(cfg.paths.saved_dir)
 
         # --- Row 1: Play / Stop / ★ Favorite ---
@@ -133,10 +145,15 @@ class MainWindow(QMainWindow):
         self._similar_btn = similar_btn
         similar_btn.clicked.connect(lambda: self._on_similar(self._current_sample))
 
+        _default_aspects = self._settings.value(
+            _keys.DEFAULT_SIMILAR_ASPECTS,
+            _keys.DEFAULTS[_keys.DEFAULT_SIMILAR_ASPECTS],
+            type=list,
+        )
         self._aspect_boxes: dict[str, QCheckBox] = {}
         for aspect in ASPECTS:
             cb = QCheckBox(aspect)
-            cb.setChecked(aspect == "Overall")
+            cb.setChecked(aspect in _default_aspects)
             self._aspect_boxes[aspect] = cb
 
         similar_grid = QGridLayout()
@@ -178,39 +195,39 @@ class MainWindow(QMainWindow):
         right_layout.addWidget(self._tag_editor, stretch=0)
 
         # --- download pane (permanent bottom section) ---
-        self._download_pane = DownloadPane()
+        self._download_pane = DownloadPane(settings=self._settings)
 
         # --- splitter layout ---
         # Top row: browser | table | preview. Bottom: Download, resizable.
-        top_splitter = QSplitter(Qt.Orientation.Horizontal)
-        top_splitter.addWidget(self._tree_pane)
-        top_splitter.addWidget(self._sample_table)
-        top_splitter.addWidget(right_panel)
-        top_splitter.setSizes([220, 680, 260])
+        self._top_splitter = QSplitter(Qt.Orientation.Horizontal)
+        self._top_splitter.addWidget(self._tree_pane)
+        self._top_splitter.addWidget(self._sample_table)
+        self._top_splitter.addWidget(right_panel)
+        self._top_splitter.setSizes([220, 680, 260])
 
-        main_splitter = QSplitter(Qt.Orientation.Vertical)
-        main_splitter.addWidget(top_splitter)
-        main_splitter.addWidget(self._download_pane)
-        main_splitter.setSizes([560, 140])
+        self._main_splitter = QSplitter(Qt.Orientation.Vertical)
+        self._main_splitter.addWidget(self._top_splitter)
+        self._main_splitter.addWidget(self._download_pane)
+        self._main_splitter.setSizes([560, 140])
 
         # --- stacked pages: 0 = samples, 1 = Ableton (ALS) explorer, 2 = Health ---
         self._als_panel = AlsExplorerPanel()
         self._health_panel = HealthPanel()
         self._pages = QStackedWidget()
-        self._pages.addWidget(main_splitter)      # index 0 — samples
-        self._pages.addWidget(self._als_panel)    # index 1 — Ableton
-        self._pages.addWidget(self._health_panel) # index 2 — Health
+        self._pages.addWidget(self._main_splitter) # index 0 — samples
+        self._pages.addWidget(self._als_panel)     # index 1 — Ableton
+        self._pages.addWidget(self._health_panel)  # index 2 — Health
 
         # --- left sidebar navigator (always visible) ---
         self._settings_btn = QPushButton("Settings")
         self._duplicates_btn = QPushButton("Duplicates")
-        self._ab_toggle_btn = QPushButton("AB Toggle")
+        self._ab_compare_btn = QPushButton("A/B Compare")
         self._nav_samples = QPushButton("Samples")
         self._nav_ableton = QPushButton("Ableton")
         self._nav_health = QPushButton("Health")
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
-        for btn in (self._settings_btn, self._duplicates_btn, self._ab_toggle_btn):
+        for btn in (self._settings_btn, self._duplicates_btn, self._ab_compare_btn):
             btn.setMinimumHeight(40)
         for idx, btn in enumerate((self._nav_samples, self._nav_ableton, self._nav_health)):
             btn.setCheckable(True)
@@ -219,10 +236,9 @@ class MainWindow(QMainWindow):
         self._nav_samples.setChecked(True)
         self._nav_group.idClicked.connect(self._on_nav_clicked)
         self._duplicates_btn.setShortcut("D")
-        self._ab_toggle_btn.setShortcut("X")
         self._settings_btn.clicked.connect(self._on_settings)
         self._duplicates_btn.clicked.connect(self._on_duplicates)
-        self._ab_toggle_btn.clicked.connect(self.toggle_ab_slot)
+        self._ab_compare_btn.clicked.connect(self._open_ab_compare)
 
         sidebar = QWidget()
         sidebar.setFixedWidth(80)
@@ -231,7 +247,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.setSpacing(4)
         sidebar_layout.addWidget(self._settings_btn)
         sidebar_layout.addWidget(self._duplicates_btn)
-        sidebar_layout.addWidget(self._ab_toggle_btn)
+        sidebar_layout.addWidget(self._ab_compare_btn)
         sidebar_layout.addWidget(self._nav_samples)
         sidebar_layout.addWidget(self._nav_ableton)
         sidebar_layout.addWidget(self._nav_health)
@@ -244,10 +260,25 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(sidebar)
         central_layout.addWidget(self._pages, stretch=1)
         self.setCentralWidget(central)
+        self._toasts = ToastManager(central)
+
+        # Restore window geometry and splitter state if prefs say so
+        if self._settings.value(_keys.REMEMBER_WINDOW_GEOMETRY, _keys.DEFAULTS[_keys.REMEMBER_WINDOW_GEOMETRY], type=bool):
+            geom = self._settings.value("browser/window_geometry")
+            if isinstance(geom, (bytes, QByteArray)) and geom:
+                self.restoreGeometry(geom if isinstance(geom, QByteArray) else QByteArray(geom))
+        if self._settings.value(_keys.REMEMBER_SPLITTER_SIZES, _keys.DEFAULTS[_keys.REMEMBER_SPLITTER_SIZES], type=bool):
+            top_state = self._settings.value("browser/top_splitter_state")
+            if isinstance(top_state, (bytes, QByteArray)) and top_state:
+                self._top_splitter.restoreState(top_state if isinstance(top_state, QByteArray) else QByteArray(top_state))
+            main_state = self._settings.value("browser/main_splitter_state")
+            if isinstance(main_state, (bytes, QByteArray)) and main_state:
+                self._main_splitter.restoreState(main_state if isinstance(main_state, QByteArray) else QByteArray(main_state))
 
         # --- status bar ---
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
+        self._status_bar.messageChanged.connect(self._on_status_message)
         self._operation_progress = QProgressBar()
         self._operation_progress.setFixedWidth(220)
         self._operation_progress.setTextVisible(True)
@@ -310,8 +341,6 @@ class MainWindow(QMainWindow):
         self._sample_table.reveal_requested.connect(self._on_reveal)
         self._sample_table.add_to_crate_requested.connect(self._on_add_to_crate)
         self._sample_table.create_crate_requested.connect(self._on_create_crate)
-        self._sample_table.set_ab_a_requested.connect(self.set_ab_slot_a)
-        self._sample_table.set_ab_b_requested.connect(self.set_ab_slot_b)
 
         # Queued signal connections marshal Python objects across the thread
         # boundary without Q_ARG(object) (which has no QMetaType here).
@@ -378,12 +407,20 @@ class MainWindow(QMainWindow):
                     label = time.strftime("%d_%m_%Y")
             self._saved_folder_samples.setdefault(label, []).append(s)
         rows = tree_rows(nodes, favorites, crates, saved, saved_root)
-        self._tree_pane.set_rows(rows)
+        self._tree_pane.set_rows(rows, expand=self._expand_tree_on_load)
         self._tree_pane.set_crate_paths({
             crate_id: [s.path for s in members]
             for crate_id, members in crate_samples_by_id.items()
         })
         self._sample_table.set_crates(crates)
+        # Restore last-used folder if pref set and no current selection
+        if (
+            self._current_tree_key is None
+            and self._settings.value(_keys.RESTORE_LAST_FOLDER, _keys.DEFAULTS[_keys.RESTORE_LAST_FOLDER], type=bool)
+        ):
+            last = self._settings.value("browser/last_folder", "", type=str)
+            if last:
+                self._tree_pane.select_key(last)
         self._refresh_current_tree_table()
         self._sync_fav_btn()
         self._refresh_tag_editor()
@@ -446,8 +483,10 @@ class MainWindow(QMainWindow):
 
     def _on_settings(self) -> None:
         if self._settings_dialog is None:
-            dialog = SettingsDialog(self._auto_preview_on_select, self)
+            dialog = SettingsDialog(self._auto_preview_on_select, settings=self._settings, parent=self)
             dialog.auto_preview_changed.connect(self._set_auto_preview_on_select)
+            dialog.preferences_changed.connect(self._on_preference_changed)
+            dialog.config_written.connect(self._on_config_written)
             dialog.finished.connect(lambda _result: setattr(self, "_settings_dialog", None))
             self._settings_dialog = dialog
         self._settings_dialog.set_auto_preview_enabled(self._auto_preview_on_select)
@@ -457,11 +496,32 @@ class MainWindow(QMainWindow):
 
     def _set_auto_preview_on_select(self, enabled: bool) -> None:
         self._auto_preview_on_select = bool(enabled)
-        self._settings.setValue("playback/auto_preview_on_select", self._auto_preview_on_select)
+        self._settings.setValue(_keys.AUTO_PREVIEW_ON_SELECT, self._auto_preview_on_select)
+
+    def _on_preference_changed(self, key: str, value: object) -> None:
+        if key == _keys.AUTO_PREVIEW_ON_SELECT:
+            self._auto_preview_on_select = bool(value)
+        elif key == _keys.AB_LOUDNESS_LEVELING:
+            self._player.apply_loudness_leveling = bool(value)
+        elif key == _keys.SHOW_TAGS_COLUMN:
+            self._sample_table.set_tags_visible(bool(value))
+        elif key == _keys.EXPAND_TREE_ON_LOAD:
+            self._expand_tree_on_load = bool(value)
+
+    def _on_config_written(self) -> None:
+        self._toasts.show("Config saved — restart required to apply changes.", "info")
 
     def _on_folder_selected(self, key: str, is_fav: bool) -> None:
         self._current_tree_key = key
         self._current_tree_is_fav = is_fav
+        self._settings.setValue("browser/last_folder", key)
+        # Touch recent folders in the DB for file-system folder keys only
+        if not is_fav and not key.startswith(("__", "fav:", "crate:", "saved-dir:")):
+            QMetaObject.invokeMethod(
+                self._worker, "request_touch_recent_folder",
+                Qt.ConnectionType.QueuedConnection,
+                Q_ARG(str, key),
+            )
         self._set_table_for_tree_key(key, is_fav)
 
     def _refresh_current_tree_table(self) -> None:
@@ -667,9 +727,14 @@ class MainWindow(QMainWindow):
         self._search_seq += 1
         self._download_pane.set_progress(None)
         self._download_pane.set_status("Searching…")
+        limit = self._settings.value(
+            _keys.DOWNLOAD_SEARCH_LIMIT,
+            _keys.DEFAULTS[_keys.DOWNLOAD_SEARCH_LIMIT],
+            type=int,
+        )
         QMetaObject.invokeMethod(
             self._worker, "request_search", Qt.ConnectionType.QueuedConnection,
-            Q_ARG(int, self._search_seq), Q_ARG(str, query), Q_ARG(str, mode), Q_ARG(int, 20),
+            Q_ARG(int, self._search_seq), Q_ARG(str, query), Q_ARG(str, mode), Q_ARG(int, limit),
         )
 
     _SEARCH_PHASE_LABELS = {"hits": "Searching backends…", "metadata": "Enriching metadata…"}
@@ -692,7 +757,12 @@ class MainWindow(QMainWindow):
         aspects = [name for name, box in self._aspect_boxes.items() if box.isChecked()] or ["Overall"]
         self._similar_seq += 1
         self._status_bar.showMessage(f"finding similar to {sample.filename}…")
-        self._similar_requested.emit(self._similar_seq, sample.id, 30, aspects)
+        k = self._settings.value(
+            _keys.SIMILAR_RESULTS_COUNT,
+            _keys.DEFAULTS[_keys.SIMILAR_RESULTS_COUNT],
+            type=int,
+        )
+        self._similar_requested.emit(self._similar_seq, sample.id, k, aspects)
 
     def _on_similar_ready(self, seq: int, samples: list, source_id: int, scores: dict) -> None:
         if seq != self._similar_seq:
@@ -718,10 +788,29 @@ class MainWindow(QMainWindow):
         dlg.show()
         self._dup_dialog = dlg
 
+    def _open_ab_compare(self) -> None:
+        from .ab_dialog import ABCompareDialog
+        dlg = ABCompareDialog(
+            getattr(self, "_nodes", {}),
+            self._crates,
+            self._worker,
+            self._player,
+            parent=self,
+        )
+        dlg.add_to_crate_requested.connect(self._on_add_to_crate)
+        dlg.create_crate_requested.connect(self._on_create_crate)
+        dlg.exec()
+
     def _on_nav_clicked(self, idx: int) -> None:
         self._pages.setCurrentIndex(idx)
-        if idx == 2:  # Health page — refresh stats on open
-            self._on_health_refresh()
+        if idx == 2:  # Health page
+            auto_refresh = self._settings.value(
+                _keys.AUTO_REFRESH_HEALTH_ON_OPEN,
+                _keys.DEFAULTS[_keys.AUTO_REFRESH_HEALTH_ON_OPEN],
+                type=bool,
+            )
+            if auto_refresh:
+                self._on_health_refresh()
 
     def _on_health_refresh(self) -> None:
         self._status_bar.showMessage("computing library health…")
@@ -841,20 +930,25 @@ class MainWindow(QMainWindow):
         except (OSError, ValueError):
             is_in_saved_dir = False
         is_saved = getattr(sample, "source", None) == "edit" or is_in_saved_dir
-        answer = QMessageBox.question(
-            self,
-            "Delete",
-            (
-                f"Delete saved file '{sample.filename}'?"
-                if is_saved
-                else f"Move '{sample.filename}' to the recycle bin?"
-            ),
+        confirm_delete = self._settings.value(
+            _keys.CONFIRM_DELETE, _keys.DEFAULTS[_keys.CONFIRM_DELETE], type=bool
         )
-        if answer == QMessageBox.StandardButton.Yes:
-            QMetaObject.invokeMethod(
-                self._worker, "request_delete", Qt.ConnectionType.QueuedConnection,
-                Q_ARG(int, sample.id),
+        if confirm_delete:
+            answer = QMessageBox.question(
+                self,
+                "Delete",
+                (
+                    f"Delete saved file '{sample.filename}'?"
+                    if is_saved
+                    else f"Move '{sample.filename}' to the recycle bin?"
+                ),
             )
+            if answer != QMessageBox.StandardButton.Yes:
+                return
+        QMetaObject.invokeMethod(
+            self._worker, "request_delete", Qt.ConnectionType.QueuedConnection,
+            Q_ARG(int, sample.id),
+        )
 
     def _on_reveal(self, sample) -> None:
         if sample is None or sample.id is None:
@@ -863,17 +957,7 @@ class MainWindow(QMainWindow):
         self._reveal_path(sample.path)
 
     def _reveal_path(self, path: str) -> None:
-        path = os.path.normpath(os.path.abspath(path))
-        try:
-            # Pass one command string so subprocess does not wrap the
-            # "/select,<path with spaces>" token in quotes — that quoting makes
-            # explorer ignore the path and fall back to the default folder.
-            subprocess.run(f'explorer /select,"{path}"')
-        except Exception:  # noqa: BLE001
-            try:
-                os.startfile(os.path.dirname(path))
-            except Exception:  # noqa: BLE001
-                pass
+        reveal_in_file_manager(path)
 
     def _delete_sample_id(self, sample_id: int) -> None:
         QMetaObject.invokeMethod(
@@ -881,79 +965,20 @@ class MainWindow(QMainWindow):
             Q_ARG(int, sample_id),
         )
 
-    def set_ab_slot_a(self, sample_id: int | None) -> None:
-        """Assign sample_id to A slot and switch playback to A."""
-        self._ab_state = self._ab_state.set_a(sample_id)
-        self._ab_state = ABState(slot_a=self._ab_state.slot_a, slot_b=self._ab_state.slot_b, current='a')
-        self._play_ab_active()
-
-    def set_ab_slot_b(self, sample_id: int | None) -> None:
-        """Assign sample_id to B slot and switch playback to B."""
-        self._ab_state = self._ab_state.set_b(sample_id)
-        self._ab_state = ABState(slot_a=self._ab_state.slot_a, slot_b=self._ab_state.slot_b, current='b')
-        self._play_ab_active()
-
-    def toggle_ab_slot(self) -> None:
-        """Toggle A/B and play the newly active sample (no-op when both slots empty)."""
-        if self._ab_state.slot_a is None and self._ab_state.slot_b is None:
+    def _on_status_message(self, text: str) -> None:
+        """Mirror status-bar messages as bottom-right toasts (progress excluded)."""
+        if not text:
             return
-        try:
-            new_state, active_id = self._ab_state.toggle()
-        except ValueError:
+        # High-frequency progress ticks stay on the bar only — no toast spam.
+        if text.endswith("processed") or re.search(r"\d+/\d+\b", text):
             return
-        self._ab_state = new_state
-        self._play_ab_active(active_id=active_id)
+        low = text.lower()
+        level = "error" if ("error" in low or "failed" in low) else "info"
+        self._toasts.show(text, level)
 
-    def _play_ab_active(self, *, active_id: int | None = None) -> None:
-        """Play the active A/B slot's file, applying loudness leveling if enabled."""
-        sid = active_id if active_id is not None else self._ab_state.active_id()
-        if sid is None:
-            return
-        # Look up file path from current sample table or cached samples.
-        path: str | None = None
-        loudness: float | None = None
-        for samples in (
-            getattr(self._sample_table, "_samples", []),
-            self._favorites,
-        ):
-            for s in samples:
-                if getattr(s, "id", None) == sid:
-                    path = s.path
-                    loudness = getattr(s, "loudness_lufs", None)
-                    break
-            if path:
-                break
-
-        if not path:
-            return
-
-        if self._player.apply_loudness_leveling and loudness is not None:
-            # Determine the other slot's loudness for gain computation.
-            other_slot = self._ab_state.slot_b if self._ab_state.current == 'a' else self._ab_state.slot_a
-            other_loudness: float | None = None
-            if other_slot is not None:
-                for samples in (getattr(self._sample_table, "_samples", []), self._favorites):
-                    for s in samples:
-                        if getattr(s, "id", None) == other_slot:
-                            other_loudness = getattr(s, "loudness_lufs", None)
-                            break
-                    if other_loudness is not None:
-                        break
-            if other_loudness is not None:
-                try:
-                    # Convert LUFS (negative dB) to linear amplitude proxy for level_gain_db.
-                    import math as _math
-                    ref_lin = _math.pow(10.0, loudness / 20.0)
-                    other_lin = _math.pow(10.0, other_loudness / 20.0)
-                    _gain = level_gain_db(ref_lin, other_lin)
-                    # gain is informational; ffplay gain application is future work
-                except (ValueError, ZeroDivisionError):
-                    pass
-
-        try:
-            self._player.play(path)
-        except Exception as exc:  # noqa: BLE001 — playback best-effort
-            self._status_bar.showMessage(f"A/B playback error: {exc}", 3000)
+    def resizeEvent(self, event) -> None:  # noqa: N802 — Qt override
+        super().resizeEvent(event)
+        self._toasts.reposition()
 
     def _on_als_match_requested(self, names) -> None:
         self._als_match_seq += 1
@@ -962,9 +987,23 @@ class MainWindow(QMainWindow):
     def _on_als_match_ready(self, seq: int, result: dict) -> None:
         if seq != self._als_match_seq:
             return
+        if not getattr(self, "_als_match_actions_wired", False):
+            self._als_panel.reveal_requested.connect(self._reveal_path)
+            self._als_panel.add_to_crate_requested.connect(self._on_add_to_crate)
+            self._als_panel.create_crate_requested.connect(self._on_create_crate)
+            self._als_match_actions_wired = True
+        self._als_panel.set_crates(self._crates)
         self._als_panel.set_match_result(result)
 
     def closeEvent(self, event) -> None:
+        # Persist window geometry and splitter state
+        if self._settings.value(_keys.REMEMBER_WINDOW_GEOMETRY, _keys.DEFAULTS[_keys.REMEMBER_WINDOW_GEOMETRY], type=bool):
+            self._settings.setValue("browser/window_geometry", self.saveGeometry())
+        if self._settings.value(_keys.REMEMBER_SPLITTER_SIZES, _keys.DEFAULTS[_keys.REMEMBER_SPLITTER_SIZES], type=bool):
+            self._settings.setValue("browser/top_splitter_state", self._top_splitter.saveState())
+            self._settings.setValue("browser/main_splitter_state", self._main_splitter.saveState())
+        # Persist column state
+        self._sample_table.save_column_state()
         self._player.stop()
         self._thread.quit()
         self._thread.wait(3000)

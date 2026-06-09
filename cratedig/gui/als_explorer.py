@@ -11,6 +11,7 @@ from PySide6.QtWidgets import (
     QFrame,
     QHBoxLayout,
     QLabel,
+    QMenu,
     QMessageBox,
     QPushButton,
     QScrollArea,
@@ -244,6 +245,9 @@ class ExpandableSamples(QWidget):
 
 class AlsExplorerPanel(QWidget):
     matchRequested = Signal(object)  # emitted with list[str] of ALS sample names
+    reveal_requested = Signal(str)
+    add_to_crate_requested = Signal(object, int)
+    create_crate_requested = Signal(object)
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -252,8 +256,40 @@ class AlsExplorerPanel(QWidget):
         self._data: dict | None = None
         self._match_seq = 0
         self._match_tab: QWidget | None = None
+        self._crates: list = []
 
         self._build_ui()
+
+    # ── Entry shape normalization helpers ──────────────────────────────────────
+
+    @staticmethod
+    def _normalize_entry(entry) -> object:
+        """Return the primary Sample from an entry (single Sample or list[Sample]).
+
+        Returns None for an empty list so callers can skip rather than IndexError.
+        """
+        if isinstance(entry, list):
+            return entry[0] if entry else None
+        return entry
+
+    def _emit_reveal_for(self, entry) -> None:
+        sample = self._normalize_entry(entry)
+        if sample is not None:
+            self.reveal_requested.emit(sample.path)
+
+    def _emit_add_to_crate_for(self, entry, crate_id: int) -> None:
+        sample = self._normalize_entry(entry)
+        if sample is not None:
+            self.add_to_crate_requested.emit(sample, crate_id)
+
+    def _emit_create_crate_for(self, entry) -> None:
+        sample = self._normalize_entry(entry)
+        if sample is not None:
+            self.create_crate_requested.emit(sample)
+
+    def set_crates(self, crates: list) -> None:
+        """Update the crates list used by the Library Match context menu."""
+        self._crates = crates if crates is not None else []
 
     # ── UI construction ────────────────────────────────────────────────────────
 
@@ -463,8 +499,9 @@ class AlsExplorerPanel(QWidget):
 
         if found:
             inner_layout.addWidget(_colored_label(f"Found ({len(found)})", C_OK, bold=True))
-            for name, _entry in found:
-                inner_layout.addWidget(_colored_label(f"  ✓  {name}", C_OK))
+            for name, entry in found:
+                row = self._build_found_row(name, entry)
+                inner_layout.addWidget(row)
 
         if candidates:
             inner_layout.addWidget(_colored_label(f"Candidates ({len(candidates)})", C_VST, bold=True))
@@ -483,6 +520,32 @@ class AlsExplorerPanel(QWidget):
         scroll.setWidget(inner)
         layout.addWidget(scroll, stretch=1)
         return tab
+
+    def _build_found_row(self, name: str, entry) -> QWidget:
+        """Build a found-entry row with a right-click context menu."""
+        lbl = _colored_label(f"  ✓  {name}", C_OK)
+        lbl.setContextMenuPolicy(Qt.ContextMenuPolicy.CustomContextMenu)
+
+        def _show_menu(pos) -> None:
+            menu = QMenu(lbl)
+            menu.addAction("Reveal in Explorer").triggered.connect(
+                lambda: self._emit_reveal_for(entry)
+            )
+            menu.addAction("New crate from sample").triggered.connect(
+                lambda: self._emit_create_crate_for(entry)
+            )
+            if self._crates:
+                add_menu = menu.addMenu("Add to crate ▸")
+                for crate in self._crates:
+                    crate_id = crate.id if hasattr(crate, "id") else crate["id"]
+                    crate_name = crate.name if hasattr(crate, "name") else crate["name"]
+                    add_menu.addAction(crate_name).triggered.connect(
+                        lambda _checked=False, cid=crate_id: self._emit_add_to_crate_for(entry, cid)
+                    )
+            menu.exec(lbl.mapToGlobal(pos))
+
+        lbl.customContextMenuRequested.connect(_show_menu)
+        return lbl
 
     # ── Render ─────────────────────────────────────────────────────────────────
 

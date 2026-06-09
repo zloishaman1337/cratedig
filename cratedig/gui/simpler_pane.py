@@ -616,6 +616,53 @@ class _WaveCanvas(QWidget):
         return points
 
 
+class _KnobDial(QDial):
+    """QDial with the native click-to-angle jump removed.
+
+    Overriding the mouse handlers directly (instead of an event filter) is the
+    only reliable way to suppress the jump: the base angle-setting code path is
+    never entered, and a double-click is never re-sent as a press. Left-press
+    starts a relative vertical drag (~150px = full range); double-click emits
+    ``doubleClicked`` so the owner can reset to its default.
+    """
+
+    doubleClicked = Signal()
+
+    def __init__(self, parent: QWidget | None = None) -> None:
+        super().__init__(parent)
+        self._press_y: float | None = None
+        self._press_value = 0
+
+    def mousePressEvent(self, event) -> None:  # noqa: N802 — Qt override
+        if event.button() == Qt.MouseButton.LeftButton:
+            self._press_y = event.position().y()
+            self._press_value = self.value()
+            event.accept()
+            return
+        super().mousePressEvent(event)
+
+    def mouseMoveEvent(self, event) -> None:  # noqa: N802 — Qt override
+        if self._press_y is not None:
+            dy = self._press_y - event.position().y()
+            steps = int(round(dy / 150.0 * self.maximum()))
+            self.setValue(self._press_value + steps)
+            event.accept()
+            return
+        super().mouseMoveEvent(event)
+
+    def mouseReleaseEvent(self, event) -> None:  # noqa: N802 — Qt override
+        if self._press_y is not None:
+            self._press_y = None
+            event.accept()
+            return
+        super().mouseReleaseEvent(event)
+
+    def mouseDoubleClickEvent(self, event) -> None:  # noqa: N802 — Qt override
+        self._press_y = None
+        self.doubleClicked.emit()
+        event.accept()
+
+
 class _Knob(QWidget):
     """Small bounded rotary control for Simpler gain/ADSR parameters."""
 
@@ -634,15 +681,14 @@ class _Knob(QWidget):
         super().__init__(parent)
         self._label = label
         self._suffix = suffix
-        self._drag_y: float | None = None
-        self._drag_value = 0.0
-
-        self._dial = QDial()
+        self._dial = _KnobDial()
         self._dial.setRange(0, int(round((hi - lo) / step)))
         self._dial.setNotchesVisible(False)
         self._dial.setWrapping(False)
         self._dial.setFixedSize(28, 28)
         self._dial.valueChanged.connect(self._on_dial_changed)
+        self._dial.doubleClicked.connect(self._reset_to_default)
+        self._default = val
 
         self._value_label = QLabel()
         self._value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
@@ -671,6 +717,9 @@ class _Knob(QWidget):
         value = max(self._lo, min(self._hi, value))
         self._dial.setValue(int(round((value - self._lo) / self._step)))
         self._sync_label()
+
+    def _reset_to_default(self) -> None:
+        self.setValue(self._default)
 
     def _on_dial_changed(self, _value: int) -> None:
         self._sync_label()

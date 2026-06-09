@@ -2,7 +2,7 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import Qt, Signal
+from PySide6.QtCore import QSettings, Qt, Signal
 from PySide6.QtWidgets import (
     QComboBox,
     QHBoxLayout,
@@ -17,7 +17,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
-from .logic import backend_badge, hit_rows
+from .logic import backend_badge, hit_rows, should_preview_hit
+from .settings_tabs import _keys
 
 _COLUMNS = ("Title", "Artist", "Year", "Album", "Duration", "Backend")
 _MODES = ("samples", "tracks", "youtube", "yandex", "freesound", "archive")
@@ -31,8 +32,9 @@ class DownloadPane(QWidget):
     preview_requested = Signal(object)          # carries the SearchHit to audition
     refresh_metadata_requested = Signal()       # no-arg; triggers metadata re-query
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(self, settings: QSettings | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self._settings = settings
         self._hits: list = []
 
         self._query = QLineEdit()
@@ -40,6 +42,17 @@ class DownloadPane(QWidget):
         self._mode = QComboBox()
         self._mode.addItems(_MODES)
         search_btn = QPushButton("Search")
+
+        # Apply saved default download mode
+        if self._settings is not None:
+            default_mode = self._settings.value(
+                _keys.DEFAULT_DOWNLOAD_MODE,
+                _keys.DEFAULTS[_keys.DEFAULT_DOWNLOAD_MODE],
+                type=str,
+            )
+            idx = self._mode.findText(default_mode)
+            if idx >= 0:
+                self._mode.setCurrentIndex(idx)
 
         top = QHBoxLayout()
         top.addWidget(self._query, stretch=1)
@@ -88,6 +101,7 @@ class DownloadPane(QWidget):
         self._refresh_meta_btn.clicked.connect(self.refresh_metadata_requested)
         self._table.itemDoubleClicked.connect(lambda _i: self._emit_download())
         self._table.currentCellChanged.connect(self._on_row_changed)
+        self._mode.currentTextChanged.connect(self._on_mode_changed)
 
     # --- inbound API (called from MainWindow) ---------------------------------
 
@@ -175,6 +189,10 @@ class DownloadPane(QWidget):
 
     # --- internal -------------------------------------------------------------
 
+    def _on_mode_changed(self, mode: str) -> None:
+        if self._settings is not None:
+            self._settings.setValue(_keys.DEFAULT_DOWNLOAD_MODE, mode)
+
     def _selected_hit(self):
         row = self._table.currentRow()
         if 0 <= row < len(self._hits):
@@ -185,6 +203,14 @@ class DownloadPane(QWidget):
         enabled = 0 <= current_row < len(self._hits)
         self._download_btn.setEnabled(enabled)
         self._preview_btn.setEnabled(enabled)
+        if enabled and self._settings is not None and self._settings.value(
+            _keys.PREVIEW_DOWNLOAD_ON_ROW_SELECT,
+            _keys.DEFAULTS[_keys.PREVIEW_DOWNLOAD_ON_ROW_SELECT],
+            type=bool,
+        ):
+            hit = self._hits[current_row]
+            if should_preview_hit(hit):
+                self.preview_requested.emit(hit)
 
     def _emit_search(self) -> None:
         query = self._query.text().strip()
