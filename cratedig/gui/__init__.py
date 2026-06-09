@@ -12,11 +12,23 @@ def run_gui(cfg=None) -> int:
     from ..config import load_config
     from ..db.database import Database
     from .main_window import MainWindow
+    from .theme import app_icon, apply_app_theme
 
     if cfg is None:
         cfg = load_config()
 
+    # Windows: distinct AppUserModelID so the taskbar shows our icon (not python's).
+    if sys.platform == "win32":
+        try:
+            import ctypes
+
+            ctypes.windll.shell32.SetCurrentProcessExplicitAppUserModelID("cratedig.app")
+        except Exception:
+            pass
+
     app = QApplication.instance() or QApplication(sys.argv)
+    apply_app_theme(app)
+    app.setWindowIcon(app_icon())
     db = Database(cfg.paths.db)
     window = MainWindow(db, cfg)
     window.show()

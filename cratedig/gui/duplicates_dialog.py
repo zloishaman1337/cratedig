@@ -21,11 +21,13 @@ from PySide6.QtWidgets import (
 
 from ..db.models import Sample
 from ..dedup import ResolutionPlan, group_duplicates, is_generated_edit, pick_best, plan_resolution
+from .theme import icon
 
 
 class DuplicatesDialog(QDialog):
     reveal_requested = Signal(str)   # sample path
     delete_requested = Signal(int)   # sample id
+    group_resolved = Signal()        # a group was resolved (request a fresh re-query)
 
     def __init__(
         self,
@@ -35,8 +37,13 @@ class DuplicatesDialog(QDialog):
     ) -> None:
         super().__init__(parent)
         self.setWindowTitle("Resolve Duplicates")
+        self.resize(760, 540)
 
         self._saved_dir = saved_dir
+        self._recompute_groups(samples)
+        self._build_ui()
+
+    def _recompute_groups(self, samples: list[Sample]) -> None:
         # Keeper ids are used as dict keys; drop any group with an un-indexed
         # member (id is None) so resolution never keys on None.
         self._groups: list[list[Sample]] = [
@@ -48,11 +55,9 @@ class DuplicatesDialog(QDialog):
         self._group_boxes: dict[int, QGroupBox] = {}
 
         for gi, group in enumerate(self._groups):
-            best = pick_best(group, saved_dir)
+            best = pick_best(group, self._saved_dir)
             self._keepers[gi] = best.id
             self._resolved[gi] = False
-
-        self._build_ui()
 
     # ------------------------------------------------------------------
     # Public API
@@ -89,6 +94,7 @@ class DuplicatesDialog(QDialog):
         if box is not None:
             box.setEnabled(False)
             box.setTitle(box.title() + "  ✓ resolved")
+        self.group_resolved.emit()
 
     # ------------------------------------------------------------------
     # UI construction
@@ -100,14 +106,10 @@ class DuplicatesDialog(QDialog):
         scroll = QScrollArea()
         scroll.setWidgetResizable(True)
         container = QWidget()
-        inner = QVBoxLayout(container)
+        self._inner = QVBoxLayout(container)
 
-        for gi, group in enumerate(self._groups):
-            box = self._make_group_box(gi, group)
-            self._group_boxes[gi] = box
-            inner.addWidget(box)
+        self._populate_groups()
 
-        inner.addStretch(1)
         scroll.setWidget(container)
         outer.addWidget(scroll, stretch=1)
 
@@ -115,8 +117,31 @@ class DuplicatesDialog(QDialog):
         button_box.rejected.connect(self.reject)
         outer.addWidget(button_box)
 
+    def _populate_groups(self) -> None:
+        for gi, group in enumerate(self._groups):
+            box = self._make_group_box(gi, group)
+            self._group_boxes[gi] = box
+            self._inner.addWidget(box)
+        self._inner.addStretch(1)
+
+    def reload(self, samples: list[Sample]) -> None:
+        """Re-query duplicates from fresh samples and rebuild group boxes.
+
+        Lets the modeless dialog reflect deletions without re-opening: resolved
+        groups disappear once their copies are gone.
+        """
+        while self._inner.count():
+            item = self._inner.takeAt(0)
+            widget = item.widget()
+            if widget is not None:
+                widget.setParent(None)
+                widget.deleteLater()
+        self._recompute_groups(samples)
+        self._populate_groups()
+
     def _make_group_box(self, gi: int, group: list[Sample]) -> QGroupBox:
         box = QGroupBox(f"Group {gi + 1} — {len(group)} copies")
+        box.setObjectName("Card")
         layout = QVBoxLayout(box)
 
         btn_group = QButtonGroup(box)
@@ -129,6 +154,8 @@ class DuplicatesDialog(QDialog):
                 radio.setChecked(True)
 
         resolve_btn = QPushButton("Resolve")
+        resolve_btn.setIcon(icon("duplicates"))
+        resolve_btn.setProperty("primary", True)
         resolve_btn.clicked.connect(lambda checked=False, g=gi: self._on_resolve_clicked(g))
         layout.addWidget(resolve_btn)
 
@@ -156,7 +183,8 @@ class DuplicatesDialog(QDialog):
         btn_group.addButton(radio)
 
         reveal_btn = QPushButton("Reveal")
-        reveal_btn.setFixedWidth(60)
+        reveal_btn.setIcon(icon("samples"))
+        reveal_btn.setFixedWidth(92)
         reveal_btn.clicked.connect(lambda checked=False, p=sample.path: self.reveal_requested.emit(p))
 
         row = QHBoxLayout()

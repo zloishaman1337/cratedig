@@ -13,6 +13,7 @@ from .settings_tabs._keys import AUTO_PREVIEW_ON_SELECT
 from .settings_tabs.preferences_tab import PreferencesTab
 from .settings_tabs.project_config_tab import ProjectConfigTab
 from .settings_tabs.paths_tab import PathsTab
+from .theme import icon
 
 
 class SettingsDialog(QDialog):
@@ -30,7 +31,9 @@ class SettingsDialog(QDialog):
         settings: QSettings | None = None,
     ) -> None:
         super().__init__(parent)
+        self.setObjectName("SettingsDialog")
         self.setWindowTitle("Settings")
+        self.setWindowIcon(icon("settings"))
         self.setModal(False)
 
         if settings is not None:
@@ -46,6 +49,7 @@ class SettingsDialog(QDialog):
         self._paths_tab = PathsTab()
 
         tabs = QTabWidget()
+        tabs.setObjectName("SettingsTabs")
         tabs.addTab(self._prefs_tab, "Preferences")
         tabs.addTab(self._config_tab, "Project Config")
         tabs.addTab(self._paths_tab, "Paths")

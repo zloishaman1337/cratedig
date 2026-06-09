@@ -2,16 +2,23 @@
 
 from __future__ import annotations
 
-from PySide6.QtCore import QMimeData, Qt, QUrl, Signal
+from PySide6.QtCore import QMimeData, QRect, Qt, QUrl, Signal
+from PySide6.QtGui import QColor, QPainter
 from PySide6.QtWidgets import (
     QAbstractItemView,
     QHBoxLayout,
+    QLabel,
     QPushButton,
+    QStyledItemDelegate,
+    QStyle,
+    QStyleOptionViewItem,
     QTreeWidget,
     QTreeWidgetItem,
     QVBoxLayout,
     QWidget,
 )
+
+from .theme import icon
 
 # Custom data roles
 _KEY_ROLE = Qt.ItemDataRole.UserRole
@@ -45,6 +52,37 @@ class _TreeWidget(QTreeWidget):
         return mime
 
 
+class _TreeItemDelegate(QStyledItemDelegate):
+    """Draw selection around item text only, leaving expand/collapse gutter clean."""
+
+    def paint(self, painter, option: QStyleOptionViewItem, index) -> None:
+        selected = bool(option.state & QStyle.StateFlag.State_Selected)
+        if not selected:
+            super().paint(painter, option, index)
+            return
+
+        opt = QStyleOptionViewItem(option)
+        self.initStyleOption(opt, index)
+        text_rect = opt.widget.style().subElementRect(
+            QStyle.SubElement.SE_ItemViewItemText,
+            opt,
+            opt.widget,
+        )
+        left = max(option.rect.left(), text_rect.left() - 10)
+        bubble = QRect(left, option.rect.top() + 1, option.rect.right() - left - 1, option.rect.height() - 2)
+
+        painter.save()
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+        painter.setPen(QColor(232, 237, 247, 40))
+        painter.setBrush(QColor("#1f3a42"))
+        painter.drawRoundedRect(bubble, 6, 6)
+        painter.restore()
+
+        opt.state &= ~QStyle.StateFlag.State_Selected
+        opt.state &= ~QStyle.StateFlag.State_HasFocus
+        super().paint(painter, opt, index)
+
+
 class TreePane(QWidget):
     """Renders a folder tree from tree_rows() output and emits selection events."""
 
@@ -57,19 +95,35 @@ class TreePane(QWidget):
         self._tree = _TreeWidget()
         self._tree.setHeaderHidden(True)
         self._tree.setColumnCount(1)
+        self._tree.setItemDelegate(_TreeItemDelegate(self._tree))
         self._tree.setDragEnabled(True)
         self._tree.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+        self._tree.setAlternatingRowColors(True)
+        self._tree.setAllColumnsShowFocus(False)
+        self._tree.setUniformRowHeights(True)
+        self._tree.setIndentation(18)
 
         scan_btn = QPushButton("Scan")
         analyze_btn = QPushButton("Analyze")
+        scan_btn.setIcon(icon("scan"))
+        analyze_btn.setIcon(icon("analyze"))
+        scan_btn.setProperty("primary", True)
+
+        title = QLabel("Library")
+        title.setObjectName("SectionTitle")
+
         btn_bar = QHBoxLayout()
-        btn_bar.setContentsMargins(4, 4, 4, 4)
+        btn_bar.setContentsMargins(8, 4, 8, 8)
+        btn_bar.setSpacing(8)
         btn_bar.addWidget(scan_btn)
         btn_bar.addWidget(analyze_btn)
         btn_bar.addStretch()
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(0, 0, 0, 0)
+        self.setObjectName("Panel")
+        layout.setContentsMargins(8, 8, 8, 8)
+        layout.setSpacing(8)
+        layout.addWidget(title)
         layout.addWidget(self._tree)
         layout.addLayout(btn_bar)
 

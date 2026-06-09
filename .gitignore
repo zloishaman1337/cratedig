@@ -19,3 +19,9 @@ data/
 # keep example's own artifacts out
 # example/yamdl/downloads/
 # example/yamdl/token.txt
+
+# packaging build artifacts (keep cratedig.ico/.icns committed; ignore the rest)
+packaging/bin/
+packaging/icons/
+packaging/windows/Output/
+packaging/*.iconset/

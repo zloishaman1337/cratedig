@@ -26,7 +26,7 @@ extensions = [".wav", ".aiff", ".aif", ".flac", ".mp3", ".ogg", ".m4a"]
 #   samples → freesound        tracks → yandex (fallback: youtube)
 strategy = "combined"
 default = "youtube"
-order = ["youtube", "yandex", "archive"]
+order = ["youtube", "yandex"]
 
 [sources.youtube]
 # yt-dlp options. audio_format passed to yt-dlp postprocessor.
@@ -56,9 +56,6 @@ token_file = "example/yamdl/token.txt"
 #   2. https://freesound.org/apiv2/apply/  → "Create new API Credentials"
 #   3. Use the "Client secret/Api key" value as `token` below.
 token = ""
-
-[sources.archive]
-# archive.org needs no key for public items.
 
 [metadata]
 # MusicBrainz requires a descriptive User-Agent.

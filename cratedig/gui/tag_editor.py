@@ -14,6 +14,8 @@ from PySide6.QtWidgets import (
     QWidget,
 )
 
+from .theme import icon
+
 
 class TagEditor(QWidget):
     """Edits the tags of the currently selected sample.
@@ -26,9 +28,11 @@ class TagEditor(QWidget):
 
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
+        self.setObjectName("Card")
         self._sample_id: int | None = None
 
         self._title = QLabel("No sample selected")
+        self._title.setObjectName("SectionTitle")
         self._list = QListWidget()
 
         self._edit = QLineEdit()
@@ -42,6 +46,10 @@ class TagEditor(QWidget):
         self._add_btn = QPushButton("Add")
         self._remove_btn = QPushButton("Remove")
         self._save_btn = QPushButton("Save tags")
+        self._add_btn.setIcon(icon("favorite"))
+        self._remove_btn.setIcon(icon("delete"))
+        self._save_btn.setIcon(icon("export"))
+        self._save_btn.setProperty("primary", True)
 
         self._add_btn.clicked.connect(self._add_tag)
         self._edit.returnPressed.connect(self._add_tag)

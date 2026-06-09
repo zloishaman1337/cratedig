@@ -23,7 +23,7 @@ from ..scan import index_file
 from .base import REGISTRY, DownloadRequest, DownloadResult, Downloader, SearchHit
 
 # Import backends so they register themselves.
-from . import youtube, yandex, freesound, archive  # noqa: F401,E402
+from . import youtube, yandex, freesound  # noqa: F401,E402
 
 
 def _now() -> str:
@@ -41,7 +41,7 @@ class DownloadManager:
         s = cfg.sources
         self.strategy = s.get("strategy", "combined")
         self.default = s.get("default", "youtube")
-        self.order = s.get("order", ["youtube", "yandex", "archive"])
+        self.order = s.get("order", ["youtube", "yandex"])
         self._last_query: str | None = None
         self._last_mode: str | None = None
         self._last_hits: list[SearchHit] = []

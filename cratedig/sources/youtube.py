@@ -59,10 +59,15 @@ class YouTubeDownloader(Downloader):
             "quiet": True,
             "no_warnings": True,
         }
-        if fmt not in ("native", "source") and shutil.which("ffmpeg"):
+        from ..paths import bundled_binary
+
+        bundled = bundled_binary("ffmpeg")
+        if fmt not in ("native", "source") and (shutil.which("ffmpeg") or bundled):
             opts["postprocessors"] = [
                 {"key": "FFmpegExtractAudio", "preferredcodec": fmt}
             ]
+            if bundled:
+                opts["ffmpeg_location"] = bundled
         return opts
 
     def _downloaded_path(self, info: dict, dest_dir: Path) -> Path | None:

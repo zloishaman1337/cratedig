@@ -416,6 +416,43 @@ class TestDuplicatesDialog:
         assert dialog.is_resolved(0) is True
         assert dialog.is_resolved(1) is False
 
+    def test_perform_resolution_emits_group_resolved(self):
+        """_perform_resolution(gi) emits group_resolved so the host can re-query."""
+        self._app()
+        from cratedig.gui.duplicates_dialog import DuplicatesDialog
+
+        s1 = _s(170, "/a/kick.wav", file_hash="h", analyzed_at="2026-01-01T00:00:00+00:00")
+        s2 = _s(171, "/b/kick.wav", file_hash="h", analyzed_at=None)
+        dialog = DuplicatesDialog([s1, s2])
+
+        fired = []
+        dialog.group_resolved.connect(lambda: fired.append(True))
+
+        dialog._perform_resolution(0)
+
+        assert fired == [True]
+
+    def test_reload_rebuilds_groups_from_fresh_samples(self):
+        """reload(samples) re-queries duplicates so resolved groups disappear."""
+        self._app()
+        from cratedig.gui.duplicates_dialog import DuplicatesDialog
+
+        # Two groups initially.
+        s1 = _s(180, "/a/kick.wav", file_hash="hash_a", analyzed_at="2026-01-01T00:00:00+00:00")
+        s2 = _s(181, "/a/kick2.wav", file_hash="hash_a", analyzed_at=None)
+        s3 = _s(182, "/b/snare.wav", file_hash="hash_b", analyzed_at="2026-01-01T00:00:00+00:00")
+        s4 = _s(183, "/b/snare2.wav", file_hash="hash_b", analyzed_at=None)
+        dialog = DuplicatesDialog([s1, s2, s3, s4])
+        assert dialog.group_count == 2
+
+        # After resolving group hash_a, its copy is gone — reload with survivors.
+        dialog.reload([s1, s3, s4])
+        assert dialog.group_count == 1
+
+        # Reload with no duplicates left.
+        dialog.reload([s1, s3])
+        assert dialog.group_count == 0
+
     def test_set_keeper_multiple_times_uses_latest(self):
         """Calling set_keeper multiple times uses the most recent value."""
         self._app()

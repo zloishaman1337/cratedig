@@ -5,10 +5,12 @@ from __future__ import annotations
 from PySide6.QtCore import Qt, QTimer, QPropertyAnimation, Signal
 from PySide6.QtWidgets import QFrame, QGraphicsOpacityEffect, QHBoxLayout, QLabel
 
+from .theme import ACCENT, ACCENT_2, ERROR, PANEL_2, TEXT
+
 _COLORS = {
-    "info": "#2b2b2b",
-    "ok": "#2e7d32",
-    "error": "#c62828",
+    "info": ACCENT,
+    "ok": ACCENT_2,
+    "error": ERROR,
 }
 
 
@@ -21,14 +23,16 @@ class _Toast(QFrame):
         super().__init__(parent)
         self.setWindowFlags(Qt.WindowType.FramelessWindowHint)
         self.setStyleSheet(
-            f"QFrame{{background:{color};border:1px solid #555;border-radius:6px;}}"
-            "QLabel{color:#ffffff;font-size:12px;background:transparent;border:none;}"
+            f"QFrame{{background:{PANEL_2};border:1px solid {color};border-left:4px solid {color};"
+            "border-radius:10px;}"
+            f"QLabel{{color:{TEXT};font-size:15px;font-weight:700;background:transparent;border:none;}}"
         )
         layout = QHBoxLayout(self)
-        layout.setContentsMargins(12, 8, 12, 8)
+        layout.setContentsMargins(18, 14, 18, 14)
         label = QLabel(text)
         label.setWordWrap(True)
-        label.setMaximumWidth(280)
+        label.setMinimumWidth(320)
+        label.setMaximumWidth(440)
         layout.addWidget(label)
 
         self._effect = QGraphicsOpacityEffect(self)
@@ -65,7 +69,7 @@ class ToastManager:
         self._host = host
         self._toasts: list[_Toast] = []
 
-    def show(self, text: str, level: str = "info", msec: int = 3500) -> None:
+    def show(self, text: str, level: str = "info", msec: int = 5200) -> None:
         if not text:
             return
         toast = _Toast(text, _COLORS.get(level, _COLORS["info"]), self._host)

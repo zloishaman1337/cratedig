@@ -23,28 +23,29 @@ from PySide6.QtWidgets import (
 )
 
 from ..als.parser import parse_als
+from .theme import ACCENT, ACCENT_2, ERROR, MUTED, PINK, WARN, icon
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 # Neutral text ("" → inherit palette so it reads on any native theme); semantic
 # colors chosen to stay legible on both light and dark; card fills are
 # translucent rgba overlays that tint without fighting the native background.
-C_OK     = "#2E9E4F"
-C_ERR    = "#D8362F"
-C_MUTED  = "#808080"
-C_LABEL  = "#808080"
+C_OK     = ACCENT_2
+C_ERR    = ERROR
+C_MUTED  = MUTED
+C_LABEL  = MUTED
 C_VALUE  = ""
 C_HEADER = ""
-C_VST    = "#B8860B"
-C_M4L    = "#8E24AA"
-C_SILENT = "#607D8B"
-C_BG_CARD = "rgba(128,128,128,0.06)"
-C_BG_ALT  = "rgba(128,128,128,0.13)"
+C_VST    = WARN
+C_M4L    = PINK
+C_SILENT = "#6d7f95"
+C_BG_CARD = "rgba(103,213,255,0.06)"
+C_BG_ALT  = "rgba(139,219,129,0.08)"
 
 _SILENT_THRESHOLD = -64.0
 
 _TYPE_COLORS = {
-    "midi": "#64B5F6", "audio": "#81C784",
-    "group": "#FFD54F", "return": "#CE93D8", "main": "#FF8A65",
+    "midi": ACCENT, "audio": ACCENT_2,
+    "group": WARN, "return": PINK, "main": "#ff9f6e",
 }
 
 # ── i18n ───────────────────────────────────────────────────────────────────────
@@ -326,11 +327,14 @@ class AlsExplorerPanel(QWidget):
         header_layout.addWidget(lang_widget)
 
         self._btn_open = QPushButton(T("btn_open"))
+        self._btn_open.setIcon(icon("samples"))
+        self._btn_open.setProperty("primary", True)
         self._btn_open.setMinimumWidth(160)
         self._btn_open.clicked.connect(self._open_file)
         header_layout.addWidget(self._btn_open)
 
         self._btn_match = QPushButton("Match library")
+        self._btn_match.setIcon(icon("search"))
         self._btn_match.setMinimumWidth(120)
         self._btn_match.setEnabled(False)
         self._btn_match.clicked.connect(self._on_match_clicked)
@@ -745,4 +749,3 @@ class AlsExplorerPanel(QWidget):
                 rows.append((t["name"], t["type"], "", C_VALUE))
 
         return rows
-

@@ -317,9 +317,9 @@ def test_classify_pending_updates_missing_categories(tmp_path):
     assert sample.category is None
     assert sample.instrument_class == "kick"
 
-    # Second call still processes because category is still NULL and the WHERE
-    # includes "category IS NULL". It will re-set the same values (idempotent).
-    assert indexer.classify_pending(db) == 1
+    # Second call processes nothing: the first pass marked the row
+    # classify_attempted=1, so partial rows no longer churn every run.
+    assert indexer.classify_pending(db) == 0
     assert db.get_sample(sid).instrument_class == "kick"
     db.close()
 

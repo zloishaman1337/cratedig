@@ -43,8 +43,9 @@ def qsettings_temp_path(tmp_path):
 
     yield tmp_path
 
-    # Cleanup: restore original settings path (restore to system defaults if needed)
-    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, QSettings.defaultFormat())
+    # Cleanup: point IniFormat UserScope away from the (about-to-be-deleted)
+    # pytest tmp_path. setPath requires a str path, not a Format enum.
+    QSettings.setPath(QSettings.IniFormat, QSettings.UserScope, tempfile.gettempdir())
 
 
 @pytest.fixture

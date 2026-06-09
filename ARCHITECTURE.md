@@ -33,7 +33,7 @@ supported secondary surface. The Web UI has been removed.
    ┌────────────────┴───────────────┐
    │ sources/ (downloaders)         │   metadata/ (ranking/cache)
    │ youtube · yandex · freesound   │   musicbrainz · discogs
-   │ · archive  + manager(fallback) │
+   │ + manager(fallback)            │
    └────────────────────────────────┘
 ```
 
@@ -68,7 +68,6 @@ via `@register`. Every attempt is logged to the `downloads` table.
 | youtube    | yt-dlp + ffmpeg   | also Bandcamp/SoundCloud; `ytsearch1:` for text |
 | yandex     | yandex-music      | mp3 direct via Python library; no yamdl.exe |
 | freesound  | FreeSound APIv2   | token-only → HQ mp3 previews (sampling-grade) |
-| archive    | internetarchive   | public items, no key |
 
 Downloaded files land in `download_dir`; re-scanning that folder indexes them with
 the proper `source`.

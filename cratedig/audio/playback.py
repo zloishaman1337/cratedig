@@ -9,11 +9,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 import math
 import hashlib
-import shutil
 import subprocess
 from pathlib import Path
 
 import numpy as np
+
+from ..paths import ffmpeg_path, ffplay_path
 
 
 def level_gain_db(ref_loudness: float, target_loudness: float) -> float:
@@ -108,7 +109,7 @@ def decode_waveform_mono_samples(
     max_seconds: int | None = None,
 ) -> np.ndarray:
     """Decode audio to a mono float32 buffer for high-resolution GUI drawing."""
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = ffmpeg_path()
     if not ffmpeg:
         return _decode_waveform_mono_samples_soundfile(path)
 
@@ -231,7 +232,7 @@ def decode_waveform_data(
     max_seconds: int | None = None,
 ) -> WaveformData:
     """Decode audio through ffmpeg and build a full-file min/max/RMS envelope."""
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = ffmpeg_path()
     if not ffmpeg:
         return _decode_waveform_data_soundfile(path, bins=bins, channels=channels)
 
@@ -384,7 +385,7 @@ def _fmt_time(seconds: float) -> str:
 
 def decode_waveform(path: str | Path, *, width: int = 80, max_seconds: int = 45) -> str:
     """Decode a short mono preview with ffmpeg and render it as text."""
-    ffmpeg = shutil.which("ffmpeg")
+    ffmpeg = ffmpeg_path()
     if not ffmpeg:
         raise RuntimeError("ffmpeg not found on PATH")
 
@@ -444,7 +445,7 @@ class AudioPlayer:
         loop: bool = False,
         gain_db: float | None = None,
     ) -> None:
-        ffplay = shutil.which("ffplay")
+        ffplay = ffplay_path()
         if not ffplay:
             raise RuntimeError("ffplay not found on PATH")
         self.stop()

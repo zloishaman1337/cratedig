@@ -14,6 +14,7 @@ dependencies = [
     "soundfile>=0.12",
     "mutagen>=1.47",
     "tomlkit>=0.12",
+    "platformdirs>=4.0",
 ]
 
 [project.optional-dependencies]
@@ -31,7 +32,6 @@ analysis = [
 download = [
     "yt-dlp>=2024.1",
     "requests>=2.31",
-    "internetarchive>=4.0",
     "yandex-music>=2.2",
 ]
 # Metadata enrichment.
@@ -45,6 +45,11 @@ index = [
 ]
 dev = [
     "pytest>=8.0",
+]
+# Build/packaging toolchain (PyInstaller onedir + icon assets). Build-only.
+build = [
+    "pyinstaller>=6.0",
+    "pillow>=10.0",
 ]
 
 [project.scripts]

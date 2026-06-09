@@ -19,9 +19,10 @@ from PySide6.QtWidgets import (
 
 from .logic import backend_badge, hit_rows, should_preview_hit
 from .settings_tabs import _keys
+from .theme import ACCENT, BORDER, ERROR, PANEL_2, TEXT, icon
 
 _COLUMNS = ("Title", "Artist", "Year", "Album", "Duration", "Backend")
-_MODES = ("samples", "tracks", "youtube", "yandex", "freesound", "archive")
+_MODES = ("samples", "tracks", "youtube", "yandex", "freesound")
 
 
 class DownloadPane(QWidget):
@@ -31,6 +32,7 @@ class DownloadPane(QWidget):
     download_requested = Signal(object)         # carries the chosen SearchHit
     preview_requested = Signal(object)          # carries the SearchHit to audition
     refresh_metadata_requested = Signal()       # no-arg; triggers metadata re-query
+    notification_requested = Signal(str)        # routed to the global toast manager
 
     def __init__(self, settings: QSettings | None = None, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -38,10 +40,12 @@ class DownloadPane(QWidget):
         self._hits: list = []
 
         self._query = QLineEdit()
-        self._query.setPlaceholderText("Search query…")
+        self._query.setPlaceholderText("Search query...")
         self._mode = QComboBox()
         self._mode.addItems(_MODES)
         search_btn = QPushButton("Search")
+        search_btn.setIcon(icon("search"))
+        search_btn.setProperty("primary", True)
 
         # Apply saved default download mode
         if self._settings is not None:
@@ -55,6 +59,8 @@ class DownloadPane(QWidget):
                 self._mode.setCurrentIndex(idx)
 
         top = QHBoxLayout()
+        top.setContentsMargins(8, 8, 8, 4)
+        top.setSpacing(8)
         top.addWidget(self._query, stretch=1)
         top.addWidget(self._mode)
         top.addWidget(search_btn)
@@ -65,12 +71,17 @@ class DownloadPane(QWidget):
         self._table.setEditTriggers(QTableWidget.EditTrigger.NoEditTriggers)
         self._table.setSelectionBehavior(QTableWidget.SelectionBehavior.SelectRows)
         self._table.setSelectionMode(QTableWidget.SelectionMode.SingleSelection)
+        self._table.setAlternatingRowColors(True)
         self._table.horizontalHeader().setSectionResizeMode(0, QHeaderView.ResizeMode.Stretch)
         self._table.verticalHeader().setVisible(False)
 
         self._download_btn = QPushButton("Download")
         self._preview_btn = QPushButton("Preview")
         self._refresh_meta_btn = QPushButton("Refresh Meta")
+        self._download_btn.setIcon(icon("download"))
+        self._preview_btn.setIcon(icon("preview"))
+        self._refresh_meta_btn.setIcon(icon("refresh"))
+        self._download_btn.setProperty("primary", True)
         self._download_btn.setEnabled(False)
         self._preview_btn.setEnabled(False)
         self._bar = QProgressBar()
@@ -81,6 +92,8 @@ class DownloadPane(QWidget):
         self._notification_label.setVisible(False)
 
         bottom = QHBoxLayout()
+        bottom.setContentsMargins(8, 4, 8, 8)
+        bottom.setSpacing(8)
         bottom.addWidget(self._download_btn)
         bottom.addWidget(self._preview_btn)
         bottom.addWidget(self._refresh_meta_btn)
@@ -88,11 +101,12 @@ class DownloadPane(QWidget):
         bottom.addWidget(self._bar, stretch=1)
 
         layout = QVBoxLayout(self)
-        layout.setContentsMargins(4, 4, 4, 4)
+        self.setObjectName("Panel")
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(4)
         layout.addLayout(top)
         layout.addWidget(self._table, stretch=1)
         layout.addLayout(bottom)
-        layout.addWidget(self._notification_label)
 
         search_btn.clicked.connect(self._emit_search)
         self._query.returnPressed.connect(self._emit_search)
@@ -135,8 +149,9 @@ class DownloadPane(QWidget):
         self._bar.setProperty("state", "idle")
         self._bar.setFormat(msg)
         self._bar.setStyleSheet(
-            "QProgressBar{border:1px solid #555;border-radius:3px;text-align:center;"
-            "background:#2b2b2b;color:#ddd;} QProgressBar::chunk{background:#444;}"
+            f"QProgressBar{{border:1px solid {BORDER};border-radius:6px;text-align:center;"
+            f"background:#10141d;color:{TEXT};font-weight:700;}} "
+            f"QProgressBar::chunk{{background:{PANEL_2};border-radius:5px;}}"
         )
 
     def start_download(self) -> None:
@@ -144,8 +159,9 @@ class DownloadPane(QWidget):
         self._bar.setProperty("state", "busy")
         self._bar.setFormat("Downloading…")
         self._bar.setStyleSheet(
-            "QProgressBar{border:1px solid #555;border-radius:3px;text-align:center;"
-            "background:#2b2b2b;color:#fff;font-weight:bold;} QProgressBar::chunk{background:#1565c0;}"
+            f"QProgressBar{{border:1px solid {ACCENT};border-radius:6px;text-align:center;"
+            f"background:#10141d;color:{TEXT};font-weight:700;}} "
+            f"QProgressBar::chunk{{background:{ACCENT};border-radius:5px;}}"
         )
 
     def finish_download(self, ok: bool, msg: str) -> None:
@@ -155,16 +171,18 @@ class DownloadPane(QWidget):
             self._bar.setProperty("state", "ok")
             self._bar.setFormat(f"✓ {msg}")
             self._bar.setStyleSheet(
-                "QProgressBar{border:1px solid #555;border-radius:3px;text-align:center;"
-                "background:#2b2b2b;color:#ffffff;font-weight:bold;} QProgressBar::chunk{background:#2e7d32;}"
+                f"QProgressBar{{border:1px solid #48b36b;border-radius:6px;text-align:center;"
+                f"background:#10141d;color:{TEXT};font-weight:700;}} "
+                "QProgressBar::chunk{background:#48b36b;border-radius:5px;}"
             )
             self.show_notification(f"Download complete: {msg}")
         else:
             self._bar.setProperty("state", "fail")
             self._bar.setFormat(f"✗ {msg}")
             self._bar.setStyleSheet(
-                "QProgressBar{border:1px solid #555;border-radius:3px;text-align:center;"
-                "background:#2b2b2b;color:#ffffff;font-weight:bold;} QProgressBar::chunk{background:#c62828;}"
+                f"QProgressBar{{border:1px solid {ERROR};border-radius:6px;text-align:center;"
+                f"background:#10141d;color:{TEXT};font-weight:700;}} "
+                f"QProgressBar::chunk{{background:{ERROR};border-radius:5px;}}"
             )
             self.show_notification(f"Download failed: {msg}")
 
@@ -177,9 +195,11 @@ class DownloadPane(QWidget):
             self._bar.setValue(int(pct))
 
     def show_notification(self, text: str) -> None:
-        """Show a transient status message in the notification label."""
+        """Request a transient global notification; the inline label stays hidden."""
         self._notification_label.setText(text)
-        self._notification_label.setVisible(bool(text))
+        self._notification_label.setVisible(False)
+        if text:
+            self.notification_requested.emit(text)
 
     def set_backend(self, source: str) -> None:
         """Update the backend badge label and color for the given source."""

@@ -276,7 +276,6 @@ _BACKEND_BADGES: dict[str, tuple[str, str]] = {
     "youtube": ("YT", "#ff0000"),
     "yandex": ("YA", "#ffcc00"),
     "freesound": ("FS", "#00aa44"),
-    "archive": ("AR", "#1565c0"),
 }
 _BADGE_FALLBACK: tuple[str, str] = ("?", "#888888")
 
@@ -317,6 +316,33 @@ def match_als_samples(names: list[str], index: dict) -> dict:
                 unresolved.append(name)
 
     return {"found": found, "candidates": candidates, "unresolved": unresolved}
+
+
+def filter_samples(
+    samples: list,
+    tags_by_id: dict,
+    text: str = "",
+    tags: list[str] | None = None,
+) -> list:
+    """Filter samples by case-insensitive filename substring AND required tags.
+
+    A sample matches when its filename contains every whitespace-separated token
+    in `text` and it carries every tag in `tags` (case-insensitive exact match).
+    `tags_by_id` maps sample id → list of tag strings.
+    """
+    tokens = [t for t in (text or "").lower().split() if t]
+    want = [t.strip().lower() for t in (tags or []) if t.strip()]
+    out: list = []
+    for s in samples:
+        name = (getattr(s, "filename", None) or Path(s.path).name).lower()
+        if tokens and not all(tok in name for tok in tokens):
+            continue
+        if want:
+            have = {t.lower() for t in tags_by_id.get(s.id, [])}
+            if not all(t in have for t in want):
+                continue
+        out.append(s)
+    return out
 
 
 def ab_level_gain_db(active_loudness: float, other_loudness: float) -> float:

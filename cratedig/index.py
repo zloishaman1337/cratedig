@@ -103,10 +103,11 @@ def classify_pending(
     for r in rows:
         cat = classify_category(r["path"]) or None
         instr = classify_instrument(r["path"]) or None
-        # Only mark attempted when filename yields nothing; rows with at least
-        # one good result stay at attempted=0 so future passes can refine them.
-        attempted = 1 if (cat is None and instr is None) else 0
-        updates.append((cat, instr, attempted, int(r["id"])))
+        # Mark every processed row attempted=1. The filename heuristic is
+        # deterministic, so re-running yields identical results; leaving partial
+        # rows (e.g. instrument hit, no category) at attempted=0 only re-processed
+        # them every pass for no gain.
+        updates.append((cat, instr, 1, int(r["id"])))
         done += 1
         if progress:
             progress(done, len(rows))

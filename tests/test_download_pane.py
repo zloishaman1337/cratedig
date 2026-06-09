@@ -42,21 +42,12 @@ class TestBackendBadge:
         assert color.startswith("#"), "Color must be a hex string starting with #"
         assert len(color) == 7, f"Hex color must be 6 digits + '#', got {color}"
 
-    def test_backend_badge_archive_returns_nonempty_label_and_color(self):
-        """'archive' should return a distinct non-empty label and valid hex color."""
-        from cratedig.gui.logic import backend_badge
-
-        label, color = backend_badge("archive")
-        assert label, "Label must not be empty"
-        assert color.startswith("#"), "Color must be a hex string starting with #"
-        assert len(color) == 7, f"Hex color must be 6 digits + '#', got {color}"
-
     def test_backend_badge_known_sources_return_distinct_labels(self):
         """Each known source should return a distinct label."""
         from cratedig.gui.logic import backend_badge
 
         labels = {}
-        for source in ("youtube", "yandex", "freesound", "archive"):
+        for source in ("youtube", "yandex", "freesound"):
             label, _ = backend_badge(source)
             labels[source] = label
 

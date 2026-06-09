@@ -9,7 +9,7 @@ import pytest
 
 from cratedig.db.models import Sample
 from cratedig.gui.logic import (
-    compute_peaks, filename_parts, hit_rows, resolve_similar, tree_rows,
+    compute_peaks, filename_parts, filter_samples, hit_rows, resolve_similar, tree_rows,
     is_sample_favorite, similar_name, format_metadata, file_urls,
     time_to_x, x_to_time, clamp_region,
 )
@@ -2500,3 +2500,49 @@ class TestShouldPreviewHit:
 
         obj = SimpleNamespace(preview_url=lambda: None)
         assert should_preview_hit(obj) is False
+
+
+class TestFilterSamples:
+    """Tests for filter_samples(samples, tags_by_id, text, tags)."""
+
+    def _samples(self):
+        return [
+            _make_sample(1, "deep_kick_808.wav"),
+            _make_sample(2, "snare_punchy.wav"),
+            _make_sample(3, "hat_closed.wav"),
+        ]
+
+    def test_empty_query_returns_all(self):
+        s = self._samples()
+        assert filter_samples(s, {}, "", []) == s
+
+    def test_text_substring_case_insensitive(self):
+        s = self._samples()
+        out = filter_samples(s, {}, "KICK", [])
+        assert [x.id for x in out] == [1]
+
+    def test_text_tokens_all_must_match(self):
+        s = self._samples()
+        assert [x.id for x in filter_samples(s, {}, "kick 808", [])] == [1]
+        assert filter_samples(s, {}, "kick snare", []) == []
+
+    def test_tags_are_anded(self):
+        s = self._samples()
+        tags_by_id = {1: ["punchy", "subby"], 2: ["punchy"], 3: ["airy"]}
+        assert [x.id for x in filter_samples(s, tags_by_id, "", ["punchy"])] == [1, 2]
+        assert [x.id for x in filter_samples(s, tags_by_id, "", ["punchy", "subby"])] == [1]
+
+    def test_tag_match_case_insensitive(self):
+        s = self._samples()
+        tags_by_id = {2: ["Punchy"]}
+        assert [x.id for x in filter_samples(s, tags_by_id, "", ["punchy"])] == [2]
+
+    def test_text_and_tags_combined(self):
+        s = self._samples()
+        tags_by_id = {1: ["subby"], 2: ["subby"]}
+        out = filter_samples(s, tags_by_id, "snare", ["subby"])
+        assert [x.id for x in out] == [2]
+
+    def test_missing_tags_entry_excluded_when_tags_required(self):
+        s = self._samples()
+        assert filter_samples(s, {}, "", ["punchy"]) == []

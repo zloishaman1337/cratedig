@@ -9,7 +9,7 @@ waveform itself is a drag source that renders to the Saved folder on drag-start.
 from __future__ import annotations
 
 import re
-from math import log10
+from math import cos, log10, radians, sin
 from pathlib import Path
 
 import numpy as np
@@ -48,6 +48,7 @@ from ..audio.editor import (
     write_wav,
 )
 from .logic import clamp_region, compute_peaks, time_to_x, x_to_time
+from .theme import ACCENT, ACCENT_2, BORDER, PINK, icon
 
 _HANDLE_GRAB_PX = 8
 _MIN_VIEW_SEC = 0.02
@@ -487,10 +488,10 @@ class _WaveCanvas(QWidget):
         painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         w, h = self.width(), self.height()
         mid = h / 2.0
-        painter.fillRect(0, 0, w, h, QColor(30, 30, 30))
+        painter.fillRect(0, 0, w, h, QColor("#10141d"))
 
         if not self._peaks:
-            painter.setPen(QPen(QColor(100, 100, 100), 1))
+            painter.setPen(QPen(QColor(BORDER), 1))
             painter.drawLine(0, int(mid), w, int(mid))
             painter.end()
             return
@@ -500,14 +501,14 @@ class _WaveCanvas(QWidget):
         fade_in_x = self._time_to_view_x(self.region[0] + self.fade_in)
         fade_out_x = self._time_to_view_x(self.region[1] - self.fade_out)
         # Shade the region.
-        region_color = QColor(170, 70, 125, 76) if self.loop_enabled else QColor(60, 60, 90)
-        region_edge = QColor(245, 130, 185) if self.loop_enabled else QColor(220, 220, 220)
+        region_color = QColor(255, 122, 182, 70) if self.loop_enabled else QColor(34, 42, 58, 150)
+        region_edge = QColor(PINK) if self.loop_enabled else QColor(ACCENT)
         painter.fillRect(QRectF(region_start_x, 0, region_end_x - region_start_x, h), region_color)
 
         # Waveform envelope.
         scale = mid * 0.95
         view_start, view_end = self.view
-        source_color = QColor(80, 160, 80)
+        source_color = QColor(ACCENT_2)
         if self._rendered_peaks:
             rendered_start, rendered_end = self._rendered_source_region
             intervals = [
@@ -633,6 +634,46 @@ class _KnobDial(QDial):
         self._press_y: float | None = None
         self._press_value = 0
 
+    def paintEvent(self, _event) -> None:  # noqa: N802 — Qt override
+        painter = QPainter(self)
+        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+
+        side = min(self.width(), self.height())
+        rect = QRectF(
+            (self.width() - side) / 2 + 4,
+            (self.height() - side) / 2 + 4,
+            side - 8,
+            side - 8,
+        )
+        center = rect.center()
+        radius = rect.width() / 2
+        ratio = 0.0 if self.maximum() <= self.minimum() else (
+            (self.value() - self.minimum()) / (self.maximum() - self.minimum())
+        )
+
+        painter.setPen(QPen(QColor("#0a0d13"), 1))
+        painter.setBrush(QColor("#0c1018"))
+        painter.drawEllipse(rect.adjusted(-2, -2, 2, 2))
+
+        painter.setPen(QPen(QColor("#2b3548"), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.setBrush(Qt.BrushStyle.NoBrush)
+        painter.drawArc(rect, 225 * 16, -270 * 16)
+
+        painter.setPen(QPen(QColor("#67d5ff"), 4, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawArc(rect, 225 * 16, int(-270 * ratio * 16))
+
+        angle = radians(225 - 270 * ratio)
+        line_inner = radius * 0.26
+        line_outer = radius * 0.78
+        p1 = center + QPointF(cos(angle) * line_inner, -sin(angle) * line_inner)
+        p2 = center + QPointF(cos(angle) * line_outer, -sin(angle) * line_outer)
+        painter.setPen(QPen(QColor("#e8edf7"), 3, Qt.PenStyle.SolidLine, Qt.PenCapStyle.RoundCap))
+        painter.drawLine(p1, p2)
+
+        painter.setPen(QPen(QColor("#293449"), 1))
+        painter.setBrush(QColor("#151b26"))
+        painter.drawEllipse(QRectF(center.x() - 4, center.y() - 4, 8, 8))
+
     def mousePressEvent(self, event) -> None:  # noqa: N802 — Qt override
         if event.button() == Qt.MouseButton.LeftButton:
             self._press_y = event.position().y()
@@ -685,22 +726,22 @@ class _Knob(QWidget):
         self._dial.setRange(0, int(round((hi - lo) / step)))
         self._dial.setNotchesVisible(False)
         self._dial.setWrapping(False)
-        self._dial.setFixedSize(28, 28)
+        self._dial.setFixedSize(38, 38)
         self._dial.valueChanged.connect(self._on_dial_changed)
         self._dial.doubleClicked.connect(self._reset_to_default)
         self._default = val
 
         self._value_label = QLabel()
         self._value_label.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        self._value_label.setFixedWidth(54)
+        self._value_label.setFixedWidth(62)
 
         layout = QVBoxLayout(self)
         layout.setContentsMargins(0, 0, 0, 0)
         layout.setSpacing(0)
         title = QLabel(label)
         title.setAlignment(Qt.AlignmentFlag.AlignCenter)
-        title.setStyleSheet("font-size: 10px;")
-        self._value_label.setStyleSheet("font-size: 10px;")
+        title.setStyleSheet("font-size: 10px; color: #97a1b3; font-weight: 700;")
+        self._value_label.setStyleSheet("font-size: 10px; color: #dce7f7;")
         layout.addWidget(title)
         layout.addWidget(self._dial, alignment=Qt.AlignmentFlag.AlignCenter)
         layout.addWidget(self._value_label)
@@ -762,7 +803,8 @@ class SimplerPane(QWidget):
         self._canvas.drag_started.connect(self._start_drag)
         self._canvas.edit_changed.connect(self._on_canvas_edit_changed)
 
-        self._reverse = QCheckBox("Reverse")
+        self._reverse = QPushButton("Reverse")
+        self._reverse.setCheckable(True)
         self._loop = QPushButton("Loop")
         self._loop.setCheckable(True)
         self._gain = self._spin(-24.0, 24.0, 0.5, 0.0, " dB", "Gain")
@@ -773,30 +815,44 @@ class SimplerPane(QWidget):
         self._sensitivity = self._spin(0.0, 1.0, 0.05, 0.5, "", "Sens")
         self._markers_cb = QCheckBox("Markers")
         self._markers_cb.setChecked(True)
+        self._reset_btn = QPushButton("Reset")
+        self._reset_btn.setIcon(icon("refresh"))
         self._normalize_btn = QPushButton("Normalize")
         self._trim_btn = QPushButton("Trim")
         self._snap_btn = QPushButton("Snap")
         self._slice_btn = QPushButton("Slice")
-        for button in (self._loop, self._normalize_btn, self._trim_btn, self._snap_btn, self._slice_btn):
+        self._normalize_btn.setIcon(icon("analyze"))
+        self._trim_btn.setIcon(icon("delete"))
+        self._snap_btn.setIcon(icon("favorite"))
+        self._slice_btn.setIcon(icon("duplicates"))
+        for button in (self._reset_btn, self._normalize_btn, self._trim_btn, self._snap_btn, self._slice_btn):
             button.setMaximumHeight(24)
-        self._reverse.stateChanged.connect(self._on_preview_control_changed)
+        for toggle in (self._reverse, self._loop):
+            toggle.setMinimumWidth(82)
+            toggle.setMinimumHeight(30)
+            toggle.setMaximumHeight(30)
+        self._reverse.toggled.connect(self._on_preview_control_changed)
         self._loop.toggled.connect(self._on_loop_toggled)
         for knob in (self._gain, self._attack, self._decay, self._sustain, self._release):
             knob.valueChanged.connect(self._on_preview_control_changed)
         self._sensitivity.valueChanged.connect(self._recompute_transients)
         self._markers_cb.toggled.connect(self._canvas.set_show_transients)
+        self._reset_btn.clicked.connect(self._reset_editor)
         self._normalize_btn.clicked.connect(self._on_normalize)
         self._trim_btn.clicked.connect(self._on_trim)
         self._snap_btn.clicked.connect(self._on_snap)
         self._slice_btn.clicked.connect(self._on_slice)
 
         preview_btn = QPushButton("Preview edit")
+        preview_btn.setIcon(icon("play"))
+        preview_btn.setProperty("primary", True)
         preview_btn.clicked.connect(self.trigger_preview)
         self._preview_btn = preview_btn
         self._preview_state = QLabel("Stopped")
         self._preview_state.setAlignment(Qt.AlignmentFlag.AlignCenter)
         self._preview_state.setMinimumWidth(50)
         export_btn = QPushButton("Export → Saved")
+        export_btn.setIcon(icon("export"))
         export_btn.clicked.connect(lambda: self.export_requested.emit(self.current_params()))
         preview_btn.setMaximumHeight(24)
         export_btn.setMaximumHeight(24)
@@ -814,6 +870,7 @@ class SimplerPane(QWidget):
         edit_row.addWidget(self._sustain)
         edit_row.addWidget(self._release)
         edit_row.addWidget(self._sensitivity)
+        edit_row.addWidget(self._reset_btn)
         edit_row.addStretch()
 
         action_row = QHBoxLayout()
@@ -830,6 +887,7 @@ class SimplerPane(QWidget):
         action_row.addWidget(export_btn)
 
         layout = QVBoxLayout(self)
+        self.setObjectName("Panel")
         layout.setContentsMargins(0, 0, 0, 0)
         layout.addWidget(self._canvas, stretch=1)
         layout.addLayout(edit_row)
@@ -900,6 +958,18 @@ class SimplerPane(QWidget):
 
     def _on_loop_toggled(self, checked: bool) -> None:
         self._canvas.set_loop_enabled(checked)
+        self._sync_live_render()
+        self._restart_preview_if_playing()
+
+    def _reset_editor(self) -> None:
+        self._reverse.setChecked(False)
+        self._loop.setChecked(False)
+        for knob in (self._gain, self._attack, self._decay, self._sustain, self._release, self._sensitivity):
+            knob._reset_to_default()
+        self._canvas.fade_in = 0.0
+        self._canvas.fade_out = 0.0
+        self._canvas.region = (0.0, self._canvas.duration)
+        self._canvas.update()
         self._sync_live_render()
         self._restart_preview_if_playing()
 

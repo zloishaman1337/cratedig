@@ -19,6 +19,7 @@ from PySide6.QtWidgets import (
 from ..db.models import Sample
 from .logic import file_urls, filename_parts, similar_name
 from .settings_tabs import _keys
+from .theme import ACCENT_2
 
 _COLUMNS = ("Filename", "Class", "Category", "BPM", "Key", "SR", "Tags", "Duration", "Similarity")
 
@@ -59,8 +60,8 @@ def _fmt_sr(samplerate: int | None) -> str:
 class SimilarityBarDelegate(QStyledItemDelegate):
     """Paints a horizontal progress bar for similarity scores stored in UserRole."""
 
-    _BAR_COLOR = QColor(80, 160, 80)
-    _TRACK_COLOR = QColor(50, 50, 50)
+    _BAR_COLOR = QColor(ACCENT_2)
+    _TRACK_COLOR = QColor("#17202d")
 
     def paint(self, painter, option: QStyleOptionViewItem, index) -> None:
         v = index.data(Qt.ItemDataRole.UserRole)
@@ -120,6 +121,7 @@ class SampleTable(QWidget):
         self._table.setSelectionMode(QTableWidget.SelectionMode.ExtendedSelection)
         self._table.setDragEnabled(True)
         self._table.setDragDropMode(QAbstractItemView.DragDropMode.DragOnly)
+        self._table.setAlternatingRowColors(True)
         header = self._table.horizontalHeader()
         header.setStretchLastSection(False)
         header.setMinimumSectionSize(44)

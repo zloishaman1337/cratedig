@@ -29,6 +29,7 @@ from PySide6.QtWidgets import (
 )
 
 from .logic import ab_level_gain_db, compute_peaks
+from .theme import ACCENT, PANEL, icon
 
 # Seq base for our peak requests — far above MainWindow's incrementing _current_seq
 # so worker.peaksReady delivered here is ignored by MainWindow._on_peaks_ready.
@@ -52,12 +53,12 @@ class _MiniWave(QWidget):
 
     def paintEvent(self, _event) -> None:  # noqa: N802 — Qt override
         painter = QPainter(self)
-        painter.fillRect(self.rect(), QColor("#1e1e1e"))
+        painter.fillRect(self.rect(), QColor(PANEL))
         if not self._peaks:
             return
         h = self.height()
         mid = h / 2.0
-        painter.setPen(QPen(QColor("#6cc6ff"), 1))
+        painter.setPen(QPen(QColor(ACCENT), 1))
         n = len(self._peaks)
         for x, (lo, hi) in enumerate(self._peaks):
             px = int(x * self.width() / n)
@@ -83,7 +84,7 @@ class _SlotPanel(QWidget):
 
         # Pulse glow used to flag the currently-playing slot during A/B toggle.
         self._glow = QGraphicsColorizeEffect(self)
-        self._glow.setColor(QColor("#6cc6ff"))
+        self._glow.setColor(QColor(ACCENT))
         self._glow.setStrength(0.0)
         self.setGraphicsEffect(self._glow)
         self._pulse = QPropertyAnimation(self._glow, b"strength", self)
@@ -119,9 +120,12 @@ class _SlotPanel(QWidget):
         self._wave = _MiniWave()
         button_row = QHBoxLayout()
         self._remove_btn = QPushButton("Remove")
+        self._remove_btn.setIcon(icon("delete"))
+        self._remove_btn.setProperty("danger", True)
         self._remove_btn.clicked.connect(self._on_remove)
         self._crate_btn = QToolButton()
         self._crate_btn.setText("Add to crate")
+        self._crate_btn.setIcon(icon("favorite"))
         self._crate_btn.setPopupMode(QToolButton.ToolButtonPopupMode.InstantPopup)
         self._crate_btn.setMenu(self._build_crate_menu())
         button_row.addWidget(self._remove_btn)
@@ -267,8 +271,11 @@ class ABCompareDialog(QDialog):
 
         controls_row = QHBoxLayout()
         self._toggle_btn = QPushButton("A/B Toggle")
+        self._toggle_btn.setIcon(icon("play"))
+        self._toggle_btn.setProperty("primary", True)
         self._toggle_btn.clicked.connect(self._toggle)
         self._reset_btn = QPushButton("Reset")
+        self._reset_btn.setIcon(icon("refresh"))
         self._reset_btn.clicked.connect(self._reset)
         controls_row.addWidget(self._toggle_btn)
         controls_row.addWidget(self._reset_btn)

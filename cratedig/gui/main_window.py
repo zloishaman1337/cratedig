@@ -6,12 +6,17 @@ import re
 import time
 from pathlib import Path
 
-from PySide6.QtCore import QByteArray, QMetaObject, QSettings, QThread, QTimer, Qt, Q_ARG, Signal
+from PySide6.QtCore import (
+    QByteArray, QEvent, QMetaObject, QSettings, QStringListModel, QThread, QTimer, Qt, Q_ARG, Signal,
+)
 from PySide6.QtWidgets import (
     QButtonGroup,
     QCheckBox,
+    QCompleter,
     QFileDialog,
     QInputDialog,
+    QLabel,
+    QLineEdit,
     QMainWindow,
     QMessageBox,
     QProgressBar,
@@ -30,13 +35,14 @@ from ..db.database import Database
 from ..audio.features import ASPECTS
 from ..audio.editor import render_edit  # noqa: F401 — monkeypatch hook; preview renders on the worker thread
 from .download_pane import DownloadPane
-from .logic import filename_parts, is_sample_favorite, tree_rows
+from .logic import filename_parts, filter_samples, is_sample_favorite, tree_rows
 from .metadata_panel import MetadataPanel
 from .player import Player
 from .sample_table import SampleTable
 from .settings_dialog import SettingsDialog
 from .settings_tabs import _keys
 from .toast import ToastManager
+from .theme import app_icon, icon
 from .tag_editor import TagEditor
 from .tree_pane import TreePane
 from .simpler_pane import SimplerPane
@@ -58,7 +64,8 @@ class MainWindow(QMainWindow):
     def __init__(self, db: Database, cfg: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setWindowTitle("cratedig")
-        self.resize(1200, 700)
+        self.setWindowIcon(app_icon())
+        self.resize(1320, 760)
 
         self._cfg = cfg
         self._player = Player()
@@ -98,6 +105,7 @@ class MainWindow(QMainWindow):
         )
         self._settings_dialog: SettingsDialog | None = None
         self._als_match_seq = 0
+        self._all_samples: list = []  # cached full sample set for client-side library filter
 
         # --- build panes ---
         expand_tree = self._settings.value(
@@ -114,6 +122,10 @@ class MainWindow(QMainWindow):
         play_btn = QPushButton("Play")
         stop_btn = QPushButton("Stop")
         fav_btn = QPushButton("★ Favorite")
+        play_btn.setIcon(icon("play"))
+        stop_btn.setIcon(icon("stop"))
+        fav_btn.setIcon(icon("favorite"))
+        play_btn.setProperty("primary", True)
         fav_btn.setCheckable(True)
         fav_btn.setShortcut("F")
         fav_btn.setEnabled(False)
@@ -141,6 +153,7 @@ class MainWindow(QMainWindow):
 
         # --- Similar search: compact block placed next to metadata ---
         similar_btn = QPushButton("Find similar")
+        similar_btn.setIcon(icon("search"))
         similar_btn.setShortcut("S")
         self._similar_btn = similar_btn
         similar_btn.clicked.connect(lambda: self._on_similar(self._current_sample))
@@ -180,15 +193,18 @@ class MainWindow(QMainWindow):
         self._metadata_panel.setMaximumWidth(170)
 
         metadata_row = QWidget()
+        metadata_row.setObjectName("Panel")
         metadata_layout = QHBoxLayout(metadata_row)
-        metadata_layout.setContentsMargins(0, 0, 0, 0)
-        metadata_layout.setSpacing(4)
+        metadata_layout.setContentsMargins(8, 6, 8, 6)
+        metadata_layout.setSpacing(8)
         metadata_layout.addWidget(self._metadata_panel, stretch=0)
         metadata_layout.addWidget(similar_bar, stretch=1)
 
         right_panel = QWidget()
+        right_panel.setObjectName("Panel")
         right_layout = QVBoxLayout(right_panel)
-        right_layout.setContentsMargins(0, 0, 0, 0)
+        right_layout.setContentsMargins(8, 8, 8, 8)
+        right_layout.setSpacing(8)
         right_layout.addWidget(self._simpler_pane, stretch=1)
         right_layout.addWidget(transport_bar, stretch=0)
         right_layout.addWidget(metadata_row, stretch=0)
@@ -197,11 +213,45 @@ class MainWindow(QMainWindow):
         # --- download pane (permanent bottom section) ---
         self._download_pane = DownloadPane(settings=self._settings)
 
+        # --- library search bar (filters the cached sample set client-side) ---
+        self._lib_search = QLineEdit()
+        self._lib_search.setPlaceholderText("Filter library by name...")
+        self._lib_search.setClearButtonEnabled(True)
+        self._lib_tag_search = QLineEdit()
+        self._lib_tag_search.setPlaceholderText("tags (comma/space separated)...")
+        self._lib_tag_search.setClearButtonEnabled(True)
+        self._lib_tag_completer = QCompleter(self)
+        self._lib_tag_completer.setCaseSensitivity(Qt.CaseSensitivity.CaseInsensitive)
+        self._lib_tag_completer.setModel(QStringListModel([], self))
+        self._lib_tag_search.setCompleter(self._lib_tag_completer)
+        self._lib_tag_search.installEventFilter(self)
+
+        self._lib_search_timer = QTimer(self)
+        self._lib_search_timer.setSingleShot(True)
+        self._lib_search_timer.setInterval(200)
+        self._lib_search_timer.timeout.connect(self._apply_library_filter)
+        self._lib_search.textChanged.connect(lambda _=None: self._lib_search_timer.start())
+        self._lib_tag_search.textChanged.connect(lambda _=None: self._lib_search_timer.start())
+
+        search_row = QHBoxLayout()
+        search_row.setContentsMargins(8, 8, 8, 4)
+        search_row.setSpacing(8)
+        search_row.addWidget(self._lib_search, stretch=2)
+        search_row.addWidget(self._lib_tag_search, stretch=1)
+
+        table_container = QWidget()
+        table_container.setObjectName("Panel")
+        table_layout = QVBoxLayout(table_container)
+        table_layout.setContentsMargins(0, 0, 0, 0)
+        table_layout.setSpacing(4)
+        table_layout.addLayout(search_row)
+        table_layout.addWidget(self._sample_table)
+
         # --- splitter layout ---
         # Top row: browser | table | preview. Bottom: Download, resizable.
         self._top_splitter = QSplitter(Qt.Orientation.Horizontal)
         self._top_splitter.addWidget(self._tree_pane)
-        self._top_splitter.addWidget(self._sample_table)
+        self._top_splitter.addWidget(table_container)
         self._top_splitter.addWidget(right_panel)
         self._top_splitter.setSizes([220, 680, 260])
 
@@ -214,6 +264,7 @@ class MainWindow(QMainWindow):
         self._als_panel = AlsExplorerPanel()
         self._health_panel = HealthPanel()
         self._pages = QStackedWidget()
+        self._pages.setObjectName("PageSurface")
         self._pages.addWidget(self._main_splitter) # index 0 — samples
         self._pages.addWidget(self._als_panel)     # index 1 — Ableton
         self._pages.addWidget(self._health_panel)  # index 2 — Health
@@ -225,13 +276,19 @@ class MainWindow(QMainWindow):
         self._nav_samples = QPushButton("Samples")
         self._nav_ableton = QPushButton("Ableton")
         self._nav_health = QPushButton("Health")
+        self._settings_btn.setIcon(icon("settings"))
+        self._duplicates_btn.setIcon(icon("duplicates"))
+        self._ab_compare_btn.setIcon(icon("compare"))
+        self._nav_samples.setIcon(icon("samples"))
+        self._nav_ableton.setIcon(icon("ableton"))
+        self._nav_health.setIcon(icon("health"))
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
         for btn in (self._settings_btn, self._duplicates_btn, self._ab_compare_btn):
-            btn.setMinimumHeight(40)
+            btn.setMinimumHeight(38)
         for idx, btn in enumerate((self._nav_samples, self._nav_ableton, self._nav_health)):
             btn.setCheckable(True)
-            btn.setMinimumHeight(40)
+            btn.setMinimumHeight(38)
             self._nav_group.addButton(btn, idx)
         self._nav_samples.setChecked(True)
         self._nav_group.idClicked.connect(self._on_nav_clicked)
@@ -241,19 +298,32 @@ class MainWindow(QMainWindow):
         self._ab_compare_btn.clicked.connect(self._open_ab_compare)
 
         sidebar = QWidget()
-        sidebar.setFixedWidth(80)
+        sidebar.setObjectName("Sidebar")
+        sidebar.setFixedWidth(148)
         sidebar_layout = QVBoxLayout(sidebar)
-        sidebar_layout.setContentsMargins(6, 6, 6, 6)
-        sidebar_layout.setSpacing(4)
+        sidebar_layout.setContentsMargins(10, 12, 10, 10)
+        sidebar_layout.setSpacing(6)
+        brand = QLabel("▣ CRATEDIG")
+        brand.setObjectName("SidebarTitle")
+        section_tools = QLabel("Tools")
+        section_tools.setObjectName("SectionTitle")
+        section_library = QLabel("Workspace")
+        section_library.setObjectName("SectionTitle")
+        sidebar_layout.addWidget(brand)
+        sidebar_layout.addSpacing(8)
+        sidebar_layout.addWidget(section_tools)
         sidebar_layout.addWidget(self._settings_btn)
         sidebar_layout.addWidget(self._duplicates_btn)
         sidebar_layout.addWidget(self._ab_compare_btn)
+        sidebar_layout.addSpacing(10)
+        sidebar_layout.addWidget(section_library)
         sidebar_layout.addWidget(self._nav_samples)
         sidebar_layout.addWidget(self._nav_ableton)
         sidebar_layout.addWidget(self._nav_health)
         sidebar_layout.addStretch()
 
         central = QWidget()
+        central.setObjectName("AppShell")
         central_layout = QHBoxLayout(central)
         central_layout.setContentsMargins(0, 0, 0, 0)
         central_layout.setSpacing(0)
@@ -330,6 +400,9 @@ class MainWindow(QMainWindow):
         self._download_pane.search_requested.connect(self._on_search_requested)
         self._download_pane.download_requested.connect(self._on_download_requested)
         self._download_pane.preview_requested.connect(self._on_preview_requested)
+        self._download_pane.notification_requested.connect(
+            lambda text: self._toasts.show(text, "ok" if "complete" in text.lower() else "error")
+        )
         self._download_pane.refresh_metadata_requested.connect(
             self._worker.request_refresh_metadata, Qt.ConnectionType.QueuedConnection
         )
@@ -388,6 +461,8 @@ class MainWindow(QMainWindow):
         saved = [s for s in samples if getattr(s, "source", None) == "edit"]
         self._tags_by_id = tags
         self._all_tags = all_tags
+        self._all_samples = samples
+        self._lib_tag_completer.setModel(QStringListModel(sorted(all_tags), self))
         self._saved_folder_samples = {}
         saved_root = self._cfg.paths.saved_dir.resolve()
         for s in saved:
@@ -530,6 +605,30 @@ class MainWindow(QMainWindow):
         shown = self._set_table_for_tree_key(self._current_tree_key, self._current_tree_is_fav)
         if not shown and self._current_tree_key not in {"__favorites__", "__saved__", "__crates__"}:
             self._sample_table.set_samples([], self._tags_by_id)
+
+    def eventFilter(self, obj, event) -> bool:
+        if obj is self._lib_tag_search and event.type() == QEvent.Type.FocusIn:
+            QTimer.singleShot(0, self._show_all_tag_completions)
+        return super().eventFilter(obj, event)
+
+    def _show_all_tag_completions(self) -> None:
+        if not self._lib_tag_search.hasFocus():
+            return
+        if not self._lib_tag_search.text().strip():
+            self._lib_tag_completer.setCompletionPrefix("")
+        self._lib_tag_completer.complete()
+
+    def _apply_library_filter(self) -> None:
+        """Filter the cached sample set by name + tags; empty query restores tree view."""
+        text = self._lib_search.text().strip()
+        raw_tags = self._lib_tag_search.text().replace(",", " ")
+        tags = [t for t in raw_tags.split() if t]
+        if not text and not tags:
+            self._refresh_current_tree_table()
+            return
+        results = filter_samples(self._all_samples, self._tags_by_id, text, tags)
+        self._sample_table.set_samples(results, self._tags_by_id, show_path=True)
+        self._status_bar.showMessage(f"{len(results)} match(es)", 3000)
 
     def _set_table_for_tree_key(self, key: str, is_fav: bool) -> bool:
         if is_fav:
@@ -778,6 +877,13 @@ class MainWindow(QMainWindow):
         QMetaObject.invokeMethod(self._worker, "request_duplicates", Qt.ConnectionType.QueuedConnection)
 
     def _on_duplicates_ready(self, samples: list) -> None:
+        existing = getattr(self, "_dup_dialog", None)
+        if existing is not None and existing.isVisible():
+            # Live-refresh the open dialog instead of stacking a new one.
+            existing.reload(samples)
+            if not samples:
+                self._status_bar.showMessage("all duplicates resolved", 4000)
+            return
         if not samples:
             self._status_bar.showMessage("no duplicates found", 4000)
             return
@@ -785,6 +891,7 @@ class MainWindow(QMainWindow):
         dlg = DuplicatesDialog(samples, self._cfg.paths.saved_dir, parent=self)
         dlg.reveal_requested.connect(self._reveal_path)
         dlg.delete_requested.connect(self._delete_sample_id)
+        dlg.group_resolved.connect(self._on_duplicates)
         dlg.show()
         self._dup_dialog = dlg
 
@@ -966,7 +1073,7 @@ class MainWindow(QMainWindow):
         )
 
     def _on_status_message(self, text: str) -> None:
-        """Mirror status-bar messages as bottom-right toasts (progress excluded)."""
+        """Route status messages to bottom-right toasts (progress excluded)."""
         if not text:
             return
         # High-frequency progress ticks stay on the bar only — no toast spam.
@@ -975,6 +1082,7 @@ class MainWindow(QMainWindow):
         low = text.lower()
         level = "error" if ("error" in low or "failed" in low) else "info"
         self._toasts.show(text, level)
+        QTimer.singleShot(0, self._status_bar.clearMessage)
 
     def resizeEvent(self, event) -> None:  # noqa: N802 — Qt override
         super().resizeEvent(event)

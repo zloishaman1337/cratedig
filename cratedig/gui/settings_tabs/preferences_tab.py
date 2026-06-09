@@ -21,6 +21,21 @@ from . import _keys
 _ASPECTS = ["Overall", "Spectrum", "Timbre", "Pitch", "Amplitude"]
 
 
+def _group_layout(box: QGroupBox) -> QVBoxLayout:
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(12, 10, 12, 10)
+    layout.setSpacing(5)
+    return layout
+
+
+def _group_form(box: QGroupBox) -> QFormLayout:
+    form = QFormLayout(box)
+    form.setContentsMargins(12, 10, 12, 10)
+    form.setHorizontalSpacing(12)
+    form.setVerticalSpacing(7)
+    return form
+
+
 class PreferencesTab(QWidget):
     """Preferences tab backed by QSettings. Writes on every widget change."""
 
@@ -55,7 +70,8 @@ class PreferencesTab(QWidget):
 
     def _build_playback_group(self) -> QGroupBox:
         box = QGroupBox("Playback")
-        layout = QVBoxLayout(box)
+        box.setObjectName("SettingsGroup")
+        layout = _group_layout(box)
 
         self._auto_preview = self._bool_checkbox(
             "Auto-preview on sample select", _keys.AUTO_PREVIEW_ON_SELECT
@@ -85,7 +101,8 @@ class PreferencesTab(QWidget):
 
     def _build_browser_group(self) -> QGroupBox:
         box = QGroupBox("Browser / Table")
-        layout = QVBoxLayout(box)
+        box.setObjectName("SettingsGroup")
+        layout = _group_layout(box)
 
         self._show_tags = self._bool_checkbox("Show tags column", _keys.SHOW_TAGS_COLUMN)
         self._remember_widths = self._bool_checkbox(
@@ -110,6 +127,8 @@ class PreferencesTab(QWidget):
         )
 
         form = QFormLayout()
+        form.setHorizontalSpacing(12)
+        form.setVerticalSpacing(9)
         self._recent_folders_max = QSpinBox()
         self._recent_folders_max.setRange(1, 100)
         self._recent_folders_max.setValue(
@@ -135,7 +154,8 @@ class PreferencesTab(QWidget):
 
     def _build_search_group(self) -> QGroupBox:
         box = QGroupBox("Search / Similarity")
-        form = QFormLayout(box)
+        box.setObjectName("SettingsGroup")
+        form = _group_form(box)
 
         self._similar_count = QSpinBox()
         self._similar_count.setRange(1, 999)
@@ -191,7 +211,8 @@ class PreferencesTab(QWidget):
 
     def _build_safety_group(self) -> QGroupBox:
         box = QGroupBox("Safety")
-        layout = QVBoxLayout(box)
+        box.setObjectName("SettingsGroup")
+        layout = _group_layout(box)
 
         self._confirm_delete = self._bool_checkbox(
             "Confirm delete", _keys.CONFIRM_DELETE

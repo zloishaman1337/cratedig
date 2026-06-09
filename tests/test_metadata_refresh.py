@@ -74,9 +74,12 @@ def fake_backends(monkeypatch):
 # ============================================================================
 
 def test_search_retains_last_query_mode_and_hits_after_tracks_search(
-    fake_backends, tmp_path
+    fake_backends, monkeypatch, tmp_path
 ):
     """After a tracks search with >= 1 hit, manager._last_hits is populated."""
+    # No metadata providers → ranking is a no-op, hits keep source order
+    # (avoids non-deterministic live MusicBrainz/Discogs lookups).
+    monkeypatch.setattr(manager_module, "PROVIDERS", {})
     db = Database(tmp_path / "t.db")
     dm = _manager(
         tmp_path,

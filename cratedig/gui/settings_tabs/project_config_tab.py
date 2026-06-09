@@ -25,6 +25,21 @@ from cratedig import config_writer
 _KNOWN_EXTENSIONS = [".wav", ".aiff", ".aif", ".flac", ".mp3", ".ogg", ".m4a"]
 
 
+def _group_layout(box: QGroupBox) -> QVBoxLayout:
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(12, 10, 12, 10)
+    layout.setSpacing(6)
+    return layout
+
+
+def _group_form(box: QGroupBox) -> QFormLayout:
+    form = QFormLayout(box)
+    form.setContentsMargins(12, 10, 12, 10)
+    form.setHorizontalSpacing(12)
+    form.setVerticalSpacing(7)
+    return form
+
+
 def _load_display_doc():
     """Return a tomlkit document for display WITHOUT creating config.toml.
 
@@ -86,7 +101,8 @@ class ProjectConfigTab(QWidget):
 
     def _build_audio_group(self, audio: dict) -> QGroupBox:
         box = QGroupBox("Audio Extensions")
-        layout = QVBoxLayout(box)
+        box.setObjectName("SettingsGroup")
+        layout = _group_layout(box)
 
         current_exts = list(audio.get("extensions", _KNOWN_EXTENSIONS))
         row = QHBoxLayout()
@@ -108,7 +124,8 @@ class ProjectConfigTab(QWidget):
 
     def _build_metadata_group(self, metadata: dict) -> QGroupBox:
         box = QGroupBox("Metadata")
-        form = QFormLayout(box)
+        box.setObjectName("SettingsGroup")
+        form = _group_form(box)
 
         self._cache_ttl = QSpinBox()
         self._cache_ttl.setRange(0, 3650)
@@ -132,7 +149,8 @@ class ProjectConfigTab(QWidget):
 
     def _build_backend_status_group(self, doc) -> QGroupBox:
         box = QGroupBox("Backend Status")
-        layout = QFormLayout(box)
+        box.setObjectName("SettingsGroup")
+        layout = _group_form(box)
 
         config_root = config_writer.resolve_config_path().parent
 

@@ -1,157 +1,180 @@
 # cratedig
 
-A local desktop + TUI fork of **Sononym**: index your sample library, search by
-**BPM / key / mood / tags**, find acoustically **similar** samples, **download**
-new audio (YouTube, Yandex Music, FreeSound, Internet Archive), organize crates,
-inspect Ableton `.als` projects, and edit/export sample regions in a Simpler-like
-panel. SQLite-backed. For personal, local use.
+**cratedig** — десктопное приложение для копания в вашей библиотеке сэмплов, как
+*Sononym*, только локально и полностью ваше. Укажите ему свои папки — он
+проиндексирует каждый сэмпл и позволит:
 
-> Status: standalone desktop GUI is now the primary surface. Scan → analyze →
-> browse → search → similarity → crates → Simpler export works in code/tests.
-> Web UI has been removed; finish the pre-redesign stabilization roadmap in
-> [ARCHITECTURE.md](ARCHITECTURE.md) before visual redesign.
+- 🔎 **Искать** по имени, тегу, категории, BPM и тональности
+- 🎯 **Находить похожие** звуки по акустическому сходству на слух (а не просто по имени)
+- 🏷️ **Авто-тегировать и классифицировать** сэмплы (kick / snare / pad / «punchy» / «airy» …)
+- 🗂️ **Организовывать** в крейты (crates) и избранное
+- ⬇️ **Скачивать** новое аудио из FreeSound, Yandex Music и YouTube прямо в библиотеку
+- 🎛️ **Нарезать и экспортировать** регионы в редакторе в стиле Simpler, а затем перетаскивать их в DAW
+- 🎚️ **Сравнивать A/B** два сэмпла с выравниванием громкости
+- 🧩 **Исследовать проекты Ableton `.als`** — смотреть инструменты, плагины, треки и сопоставлять использованные сэмплы с вашей библиотекой
+- 🩺 **Дашборд здоровья** + **поиск дубликатов** для поддержания чистоты библиотеки
 
-## Install
+Всё работает локально. Ваша библиотека, база данных и настройки остаются на вашем
+компьютере.
 
-```powershell
-python -m venv .venv
-.venv\Scripts\Activate.ps1
-pip install -e .                       # core: TUI + scan + search
-pip install -e ".[analysis]"           # + librosa: BPM/key/similarity
-pip install -e ".[download,metadata]"  # + downloaders + MusicBrainz/Discogs
-pip install -e ".[gui]"                # + PySide6: desktop GUI (optional)
-```
+---
 
-`ffmpeg` must be on PATH for YouTube audio extraction and best waveform decoding.
-Without `ffmpeg`, YouTube downloads fall back to yt-dlp's native bestaudio file.
-Waveform rendering falls back to `soundfile` for formats it can decode.
-`ffplay` must be on PATH for TUI playback.
+## Установка
 
-## Configure
+### Windows
 
-```powershell
-copy config.example.toml config.toml
-```
+1. Скачайте **`cratedig-setup-0.1.0.exe`**.
+2. Запустите. (Windows SmartScreen может предупредить, потому что установщик не
+   подписан сертификатом — нажмите **Подробнее → Выполнить в любом случае**.)
+3. Выберите папку установки, при желании отметьте **Создать ярлык на рабочем
+   столе**, завершите установку.
+4. Запустите **cratedig** из меню «Пуск» или с рабочего стола.
 
-Edit `config.toml` — set `library_dirs`, `download_dir`, and any API tokens.
-Do not commit your local `config.toml` if it contains tokens or machine-specific
-paths; keep `config.example.toml` as the shareable template.
+ffmpeg/ffplay (нужны для воспроизведения, превью волны и YouTube) **встроены** в
+приложение — больше ничего ставить не нужно.
 
-## Use
+Чтобы удалить: *Параметры → Приложения* (или *Удалить cratedig* в меню «Пуск»).
+Ваша библиотека и настройки **сохраняются** (см. *Где хранятся ваши данные* ниже).
 
-```powershell
-cratedig                 # launch the TUI
-cratedig gui             # launch the desktop GUI (needs [gui] extra)
-cratedig scan            # index library_dirs (headless)
-cratedig classify        # fill missing categories from filenames/paths
-cratedig analyze         # compute BPM/key/feature vectors (needs librosa)
-cratedig download "artist - track"            # combined-fallback download
-cratedig download "<url>" --url --source youtube
-```
+### macOS
 
-### TUI keys
+1. Откройте **`cratedig-0.1.0.dmg`** и перетащите **cratedig** в **Applications**.
+2. Первый запуск: правый клик по приложению → **Открыть** → **Открыть** (приложение
+   не нотаризовано, поэтому обычный двойной клик в первый раз блокируется).
 
-| key | action |
-|-----|--------|
-| `s` | scan library_dirs |
-| `a` | analyze (compute descriptors) |
-| `c` | classify missing categories |
-| `f` | find similar to selected row |
-| `u` | show duplicate files grouped by file hash |
-| `t` | reload the path-based library tree |
-| `b` | toggle favorite on the selected folder (in tree) or sample (in contents) |
-| arrows / click | preview the highlighted sample or download hit (uses `ffplay`) |
-| `p` | play / stop the selected sample, or preview the selected download hit |
-| `x` | stop playback |
-| `r` | refresh / clear search |
-| `d` | toggle Download mode |
-| `1` / `2` (in download mode) | switch dl_mode: `samples` (FreeSound) / `tracks` (Yandex → YT fallback) |
-| `Enter` (in search box) | browse: filter by filename · download: run backend search |
-| `Enter` (on a hit) | download the highlighted candidate (auto-indexed into library) |
-| `q` | quit |
+   Если macOS всё равно не даёт открыть, выполните в Терминале:
+   `xattr -dr com.apple.quarantine /Applications/cratedig.app`
 
-Download-mode preview needs a direct preview URL from the backend. FreeSound
-results include one; Yandex/YouTube hits usually do not, so they show a status
-message and can still be downloaded with `Enter`.
+> **Системные требования (macOS):** сборка нативная под **Apple Silicon (arm64)** —
+> на Intel-маках не запустится. Встроенные ffmpeg/ffplay собраны под Intel и
+> работают через **Rosetta 2**: при первом обращении macOS предложит её
+> установить — согласитесь (одноразово).
 
-### Desktop GUI
+### Запуск из исходников
 
-```powershell
-pip install -e ".[gui]"   # installs PySide6
-cratedig gui              # or: python -m cratedig gui
-```
+Разработчикам и пользователям Linux: см. **[README.dev.md](README.dev.md)**.
 
-The desktop GUI is the main app surface. It includes a folder tree, sample table,
-favorites, crates, similarity search, metadata panel, download pane, embedded
-Ableton `.als` explorer, and a Simpler-like editor/preview pane with region,
-fade, ADSR, reverse, loop preview, Saved exports, and drag export. Playback reuses
-the same `ffplay`-backed `AudioPlayer` as the TUI. PySide6 is an optional
-dependency; core CLI/TUI commands still run without it.
+---
 
-Before redesign, the locked stabilization roadmap is: clean legacy files/docs,
-fix drag-to-DAW, improve download/metadata feedback, add Simpler transient tools,
-build a duplicates resolver, match missing ALS samples against the library, add
-A/B audition controls, expand auto-tags, and add a library health dashboard.
+## Первый запуск
 
-### API tokens
+При первом запуске cratedig автоматически создаёт свои настройки и базу данных.
+Дальше:
 
-The Download mode needs credentials for the paid/private backends. See
-`config.example.toml` for step-by-step instructions on getting tokens for:
+1. Откройте **Настройки** (боковая панель / иконка шестерёнки).
+2. Вкладка **Paths** → добавьте свою папку (папки) с сэмплами в **Library folders**
+   и задайте **Download folder** и **Saved folder**, если хотите нестандартные
+   расположения.
+3. Нажмите **Scan** — cratedig проиндексирует каждый аудиофайл в этих папках.
+4. Нажмите **Analyze** — посчитает BPM, тональность и акустический «отпечаток»,
+   на котором работает *Find similar*. (Первый прогон на большой библиотеке займёт
+   время; дальше всё инкрементально.)
 
-- **FreeSound** (`sources.freesound.token`) — required for sample search/download.
-- **Yandex Music** (`sources.yandex.token` or `token_file`) — required for track search/download. The old `yamdl.exe` flow is gone; we now use the `yandex-music` Python library directly.
-- **YouTube** — no token; `pip install -e ".[download]"` for `yt-dlp` + `ffmpeg` on PATH.
+Готово — листайте, ищите и играйте.
 
-Scan, analyze, classify, and download operations show live progress/status in a
-multi-line TUI operation panel. Scan and analyze are intentionally mutually exclusive.
-After analysis, the TUI library table shows a compact waveform thumbnail in each
-analyzed file row.
+---
 
-## Clone on another machine
+## Где хранятся ваши данные
 
-```powershell
-git clone https://github.com/<your-user>/Sononym_fork.git
-cd Sononym_fork
+cratedig держит ваши данные в папке пользователя, а **не** в папке установки,
+поэтому удаление/переустановка никогда не трогают вашу библиотеку:
 
-py -3.11 -m venv .venv
-.\.venv\Scripts\Activate.ps1
+| Что | Windows | macOS |
+|------|---------|-------|
+| Настройки (`config.toml`) | `%APPDATA%\cratedig\` | `~/Library/Application Support/cratedig/` |
+| База данных | `…\cratedig\data\cratedig.db` | `…/cratedig/data/cratedig.db` |
+| Загрузки и экспорт (Saved) | как задано в **Settings → Paths** | так же |
 
-python -m pip install -U pip
-pip install -e ".[dev,analysis,download,metadata]"
-copy config.example.toml config.toml
-notepad config.toml
-```
+Чтобы сделать резервную копию или перенести библиотеку — просто скопируйте эту папку.
 
-Set `library_dirs`, `download_dir`, and tokens in the new machine's local
-`config.toml`, then run:
+---
 
-```powershell
-cratedig scan
-cratedig analyze
-cratedig
-cratedig gui
-```
+## Возможности
 
-Recommended Windows tools:
+### Просмотр и поиск
+Дерево папок слева, сортируемая таблица сэмплов справа (имя файла, класс,
+категория, BPM, тональность, частота дискретизации, теги, длительность). Введите
+текст в поле поиска, чтобы фильтровать по имени; используйте фильтры по тегам и
+категориям для сужения. Клик или прокрутка стрелками по строкам мгновенно
+**прослушивает** их; повторные действия запускают/останавливают воспроизведение.
 
-```powershell
-winget install --id Gyan.FFmpeg --source winget
-ffmpeg -version
-ffplay -version
-```
+### Поиск похожих (Find similar)
+Выберите сэмпл и нажмите **Find similar** — cratedig отранжирует остальную
+библиотеку по акустической близости. Можно сместить акцент сопоставления на
+конкретные *аспекты* (Overall / Spectrum / Timbre / Pitch / Amplitude), чтобы найти,
+например, «тот же тембр, другая высота».
 
-Large/local artifacts such as `.venv/`, `data/`, SQLite DBs, downloaded audio,
-and private tokens should stay out of git unless you intentionally choose
-otherwise.
+### Авто-тегирование и классификация
+**Classify** угадывает класс инструмента и категорию по именам файлов и аудио.
+Анализ также выводит описательные character-теги (punchy, soft, clicky, subby,
+airy, metallic, tonal, percussive, long-tail …). Можно добавлять и свои теги —
+ручные и авто-теги учитываются раздельно.
 
-## Layout
+### Крейты и избранное
+Группируйте сэмплы в **крейты** (правый клик по строке → *Add to crate / New
+crate*) и отмечайте **избранное** звёздочкой. И то, и другое отображается как
+закреплённые ветви в дереве.
 
-See [ARCHITECTURE.md](ARCHITECTURE.md). Source under `cratedig/`:
-`db/` · `scan/` · `audio/` · `search/` · `sources/` · `metadata/` · `tui/` · `gui/` · `als/`.
+### Скачивание нового аудио
+Откройте панель **Download**, выберите режим и ищите:
 
-## Tests
+- **Samples → FreeSound** (нужен бесплатный API-токен)
+- **Tracks → Yandex Music** с откатом на **YouTube** (для Yandex нужен токен; для YouTube — нет)
 
-```powershell
-pip install -e ".[dev]"
-python -m pytest
-```
+Найденное можно прослушать (когда бэкенд даёт превью) и скачать прямо в библиотеку,
+где оно автоматически индексируется. Результаты по трекам обогащаются метаданными
+**MusicBrainz / Discogs** для лучшего именования и ранжирования.
+
+> **Токены:** в Settings → **Project Config** есть поля для токенов FreeSound,
+> Yandex и Discogs. Пошаговые инструкции по получению каждого токена — во встроенном
+> `config.example.toml` (и в подсказках в Настройках).
+
+### Редактор в стиле Simpler
+Загрузите сэмпл в панель редактора, чтобы задать **регион**, **фейды**, огибающую
+**ADSR**, превью **reverse** и **loop**. Определяйте **транзиенты** и делайте
+**авто-нарезку**. **Экспортируйте** отрендеренный регион в папку *Saved*
+(автоиндексируется) или **перетащите** его прямо в Ableton / вашу DAW.
+
+### Сравнение A/B
+Откройте два сэмпла рядом и переключайтесь между ними с **выравниванием громкости**,
+чтобы разница в громкости не сбивала слух.
+
+### Исследователь Ableton `.als`
+Перетащите проект Ableton `.als` на cratedig, чтобы увидеть список его
+**инструментов, плагинов и треков** (AU/VST2/VST3/M4L). Вкладка **Library Match**
+находит, какие из сэмплов проекта есть в вашей библиотеке — правый клик, чтобы
+показать в файловом менеджере, добавить в крейт или создать крейт из них. Доступно
+на английском и русском.
+
+### Здоровье и дубликаты
+Дашборд **Health** показывает статистику библиотеки и помечает проблемы (например,
+отсутствующие файлы) с кнопкой **Remove Missing** в один клик. Инструмент
+**Duplicates** группирует идентичные файлы и предлагает, какую копию оставить.
+
+### Настройки
+Три вкладки — **Preferences** (поведение: авто-превью, режим загрузки по умолчанию,
+видимость колонок, удаление в корзину, …), **Project Config** (токены, метаданные,
+расширения аудиофайлов) и **Paths** (папки библиотеки/загрузок/Saved, база данных).
+Изменения конфигурации библиотеки или токенов могут потребовать перезапуска
+приложения.
+
+---
+
+## Советы и решение проблем
+
+- **Нет звука / нет волны:** воспроизведение использует встроенные ffmpeg/ffplay;
+  если вы запускаете из исходников, убедитесь, что `ffmpeg` и `ffplay` есть в PATH.
+- **Find similar ничего не возвращает:** сначала выполните **Analyze** — для поиска
+  похожих нужен акустический отпечаток.
+- **Загрузки не работают:** проверьте соответствующий токен в *Settings → Project
+  Config*. Локальный VPN/прокси тоже может блокировать результаты FreeSound.
+- **Сбросить всё:** закройте cratedig и удалите папку данных из таблицы выше (это
+  сотрёт ваш индекс и настройки, но не сами аудиофайлы).
+
+---
+
+## Лицензия и благодарности
+
+Форк для личного использования, вдохновлённый Sononym. Включает ffmpeg/ffplay
+(проект FFmpeg) и построен на PySide6, librosa, yt-dlp и других. Технические детали
+см. в `README.dev.md` / `ARCHITECTURE.md`.

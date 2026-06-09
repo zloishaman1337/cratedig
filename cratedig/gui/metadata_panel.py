@@ -13,8 +13,10 @@ class MetadataPanel(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self.setMaximumHeight(160)
+        self.setObjectName("Card")
 
         self._title = QLabel("Metadata")
+        self._title.setObjectName("SectionTitle")
         self._text = QTextEdit()
         self._text.setReadOnly(True)
         self._text.setMaximumHeight(130)

@@ -19,6 +19,16 @@ def _now() -> str:
     return datetime.now(timezone.utc).isoformat(timespec="seconds")
 
 
+def _read_schema() -> str:
+    """Read schema.sql via importlib.resources, falling back to the frozen bundle."""
+    try:
+        return resources.files("cratedig.db").joinpath("schema.sql").read_text("utf-8")
+    except (FileNotFoundError, ModuleNotFoundError, OSError):
+        from ..paths import resource_path
+
+        return resource_path("cratedig/db/schema.sql").read_text("utf-8")
+
+
 class Database:
     def __init__(self, path: str | Path):
         self.path = Path(path)
@@ -33,7 +43,7 @@ class Database:
 
     # --- schema ---------------------------------------------------------
     def _migrate(self) -> None:
-        schema = resources.files("cratedig.db").joinpath("schema.sql").read_text("utf-8")
+        schema = _read_schema()
         with self.lock:
             self.conn.executescript(schema)
             self._ensure_sample_columns()

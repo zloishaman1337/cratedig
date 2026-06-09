@@ -27,6 +27,21 @@ from PySide6.QtCore import Qt
 from cratedig import config_writer
 
 
+def _group_layout(box: QGroupBox) -> QVBoxLayout:
+    layout = QVBoxLayout(box)
+    layout.setContentsMargins(12, 10, 12, 10)
+    layout.setSpacing(6)
+    return layout
+
+
+def _group_form(box: QGroupBox) -> QFormLayout:
+    form = QFormLayout(box)
+    form.setContentsMargins(12, 10, 12, 10)
+    form.setHorizontalSpacing(12)
+    form.setVerticalSpacing(7)
+    return form
+
+
 def _load_display_doc():
     """Return a tomlkit document for display WITHOUT creating config.toml."""
     import tomlkit
@@ -83,7 +98,8 @@ class PathsTab(QWidget):
 
     def _build_library_dirs_group(self, paths: dict) -> QGroupBox:
         box = QGroupBox("Library Directories")
-        layout = QVBoxLayout(box)
+        box.setObjectName("SettingsGroup")
+        layout = _group_layout(box)
 
         self._dirs_list = QListWidget()
         for d in paths.get("library_dirs", []):
@@ -115,7 +131,8 @@ class PathsTab(QWidget):
 
     def _build_paths_group(self, paths: dict) -> QGroupBox:
         box = QGroupBox("Paths")
-        form = QFormLayout(box)
+        box.setObjectName("SettingsGroup")
+        form = _group_form(box)
 
         self._download_dir = QLineEdit(str(paths.get("download_dir", "")))
         dl_row = QHBoxLayout()
@@ -141,7 +158,8 @@ class PathsTab(QWidget):
 
     def _build_tokens_group(self, doc) -> QGroupBox:
         box = QGroupBox("API Tokens")
-        form = QFormLayout(box)
+        box.setObjectName("SettingsGroup")
+        form = _group_form(box)
 
         config_root = config_writer.resolve_config_path().parent
 
