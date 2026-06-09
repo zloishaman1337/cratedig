@@ -584,7 +584,30 @@ class MainWindow(QMainWindow):
             self._expand_tree_on_load = bool(value)
 
     def _on_config_written(self) -> None:
-        self._toasts.show("Config saved — restart required to apply changes.", "info")
+        from PySide6.QtWidgets import QMessageBox
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Restart required")
+        box.setText("Settings saved. Restart now to apply changes?")
+        box.setStandardButtons(QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No)
+        box.setDefaultButton(QMessageBox.StandardButton.Yes)
+        if box.exec() == QMessageBox.StandardButton.Yes:
+            self._restart_app()
+        else:
+            self._toasts.show("Config saved — restart required to apply changes.", "info")
+
+    def _restart_app(self) -> None:
+        """Relaunch the app so reloaded config takes effect, then quit this instance."""
+        import sys
+
+        from PySide6.QtCore import QProcess
+        from PySide6.QtWidgets import QApplication
+
+        if getattr(sys, "frozen", False):
+            QProcess.startDetached(sys.executable, [])
+        else:
+            QProcess.startDetached(sys.executable, ["-m", "cratedig.gui"])
+        QApplication.quit()
 
     def _on_folder_selected(self, key: str, is_fav: bool) -> None:
         self._current_tree_key = key

@@ -16,7 +16,7 @@ from typing import Sequence
 import tomlkit
 from tomlkit import TOMLDocument
 
-from cratedig.config import DEFAULT_CONFIG_NAME, ENV_CONFIG
+from cratedig.config import ENV_CONFIG, _default_config_path
 
 EXAMPLE_CONFIG_NAME = "config.example.toml"
 
@@ -27,13 +27,17 @@ class ConfigWriterError(RuntimeError):
 
 
 def resolve_config_path(path: str | os.PathLike | None = None) -> Path:
-    """Target path: explicit arg > CRATEDIG_CONFIG env > ./config.toml."""
+    """Target path: explicit arg > CRATEDIG_CONFIG env > default location.
+
+    Must mirror config.load_config exactly so the GUI writes where the app
+    reads: source run → ./config.toml, frozen → %APPDATA%\\cratedig\\config.toml.
+    """
     if path is not None:
         return Path(path)
     env = os.environ.get(ENV_CONFIG)
     if env:
         return Path(env)
-    return Path(DEFAULT_CONFIG_NAME)
+    return _default_config_path()
 
 
 def _example_path(target: Path) -> Path:
