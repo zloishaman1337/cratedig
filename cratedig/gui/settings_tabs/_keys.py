@@ -25,6 +25,7 @@ EXPAND_TREE_ON_LOAD = "browser/expand_tree_on_load"
 RESTORE_LAST_FOLDER = "browser/restore_last_folder"
 RECENT_FOLDERS = "browser/recent_folders"
 RECENT_FOLDERS_MAX = "browser/recent_folders_max"
+LIBRARY_LOAD_LIMIT = "browser/library_load_limit"  # max samples loaded into the tree; 0 = all
 
 # ---------------------------------------------------------------------------
 # search/
@@ -63,6 +64,7 @@ DEFAULTS: dict[str, object] = {
     RESTORE_LAST_FOLDER: True,
     RECENT_FOLDERS: [],
     RECENT_FOLDERS_MAX: 10,
+    LIBRARY_LOAD_LIMIT: 0,
     DEFAULT_SIMILAR_ASPECTS: ["Overall"],
     SIMILAR_RESULTS_COUNT: 30,
     DOWNLOAD_SEARCH_LIMIT: 20,
@@ -92,6 +94,7 @@ TYPES: dict[str, type] = {
     RESTORE_LAST_FOLDER: bool,
     RECENT_FOLDERS: list,
     RECENT_FOLDERS_MAX: int,
+    LIBRARY_LOAD_LIMIT: int,
     DEFAULT_SIMILAR_ASPECTS: list,
     SIMILAR_RESULTS_COUNT: int,
     DOWNLOAD_SEARCH_LIMIT: int,

@@ -139,6 +139,17 @@ class PreferencesTab(QWidget):
         )
         form.addRow("Max recent folders:", self._recent_folders_max)
 
+        self._library_load_limit = QSpinBox()
+        self._library_load_limit.setRange(0, 1_000_000)
+        self._library_load_limit.setSpecialValueText("All")
+        self._library_load_limit.setValue(
+            int(self._settings.value(_keys.LIBRARY_LOAD_LIMIT, _keys.DEFAULTS[_keys.LIBRARY_LOAD_LIMIT], type=int))
+        )
+        self._library_load_limit.valueChanged.connect(
+            lambda v: self._write(_keys.LIBRARY_LOAD_LIMIT, v)
+        )
+        form.addRow("Library load limit (0 = all):", self._library_load_limit)
+
         for w in (
             self._show_tags,
             self._remember_widths,

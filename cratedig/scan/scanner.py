@@ -8,6 +8,8 @@ separate optional pass in `audio.analyzer`, run via index.analyze_pending.
 from __future__ import annotations
 
 import hashlib
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable, Iterator
@@ -15,6 +17,11 @@ from typing import Callable, Iterator
 from ..db import Database
 from ..db.models import Sample
 from ..audio.category import classify_category, classify_instrument
+
+
+def _scan_workers() -> int:
+    """Pool size for per-file hashing/probing/preview decode (I/O + ffmpeg bound)."""
+    return max(1, min(os.cpu_count() or 4, 8))
 
 
 def _sha1(path: Path, chunk: int = 1 << 20) -> str:
@@ -116,42 +123,10 @@ def scan_directory(
     `progress(path, n)` is called per newly indexed file if provided.
     """
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    count = 0
-    seen_paths: set[str] = set()
-    for fp in iter_audio_files(root, extensions):
-        spath = str(fp.resolve())
-        seen_paths.add(spath)
-        if db.path_exists(spath):
-            with db.lock:
-                row = db.conn.execute(
-                    "SELECT file_hash FROM samples WHERE path=?", (spath,)
-                ).fetchone()
-            file_hash = row["file_hash"] if row is not None else None
-            if file_hash is None:
-                file_hash = _sha1(fp)
-            _ensure_preview_cache(fp, preview_cache_dir, file_hash)
-            if source == "edit":
-                meta = probe_file(fp)
-                sample = Sample(
-                    id=None,
-                    path=spath,
-                    filename=fp.name,
-                    source=source,
-                    file_hash=file_hash,
-                    format=meta["format"],
-                    file_size=meta["file_size"],
-                    duration_sec=meta["duration_sec"],
-                    samplerate=meta["samplerate"],
-                    channels=meta["channels"],
-                    category=classify_category(fp),
-                    instrument_class=classify_instrument(fp),
-                    created_at=now,
-                )
-                db.upsert_sample(sample)
-            continue
-        file_hash = _sha1(fp)
+
+    def _build_sample(fp: Path, spath: str, file_hash: str) -> Sample:
         meta = probe_file(fp)
-        sample = Sample(
+        return Sample(
             id=None,
             path=spath,
             filename=fp.name,
@@ -166,10 +141,46 @@ def scan_directory(
             instrument_class=classify_instrument(fp),
             created_at=now,
         )
-        db.upsert_sample(sample)
+
+    def _prep(fp: Path):
+        """Heavy per-file work (resolve, hash, probe, preview decode) off the DB-write
+        path. Returns (spath, sample_to_upsert_or_None, is_new)."""
+        spath = str(fp.resolve())
+        if db.path_exists(spath):
+            with db.lock:
+                row = db.conn.execute(
+                    "SELECT file_hash FROM samples WHERE path=?", (spath,)
+                ).fetchone()
+            file_hash = row["file_hash"] if row is not None else None
+            if file_hash is None:
+                file_hash = _sha1(fp)
+            _ensure_preview_cache(fp, preview_cache_dir, file_hash)
+            # Saved/edit rows are re-probed so Simpler exports refresh in place.
+            sample = _build_sample(fp, spath, file_hash) if source == "edit" else None
+            return spath, sample, False
+        file_hash = _sha1(fp)
+        sample = _build_sample(fp, spath, file_hash)
         _ensure_preview_cache(fp, preview_cache_dir, file_hash)
-        count += 1
-        if progress:
-            progress(fp, count)
+        return spath, sample, True
+
+    count = 0
+    pending = 0
+    seen_paths: set[str] = set()
+    files = list(iter_audio_files(root, extensions))
+    with ThreadPoolExecutor(max_workers=_scan_workers()) as pool:
+        for spath, sample, is_new in pool.map(_prep, files):
+            seen_paths.add(spath)
+            if sample is not None:
+                db.upsert_sample(sample, commit=False)
+                pending += 1
+                if pending >= 128:
+                    db.commit()
+                    pending = 0
+            if is_new:
+                count += 1
+                if progress:
+                    progress(Path(spath), count)
+    if pending:
+        db.commit()
     db.prune_missing_samples(root, seen_paths)
     return count

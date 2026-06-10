@@ -19,7 +19,7 @@ AppId={{A7C1F3E2-9B4D-4C2A-8F1E-CRATEDIG0001}
 AppName={#AppName}
 AppVersion={#Version}
 AppPublisher=cratedig
-DefaultDirName={autopf}\{#AppName}
+DefaultDirName={localappdata}\Programs\{#AppName}
 DefaultGroupName={#AppName}
 DisableProgramGroupPage=yes
 UninstallDisplayIcon={app}\{#ExeName}
@@ -30,7 +30,7 @@ SolidCompression=yes
 WizardStyle=modern
 ArchitecturesAllowed=x64compatible
 ArchitecturesInstallIn64BitMode=x64compatible
-PrivilegesRequired=admin
+PrivilegesRequired=lowest
 
 [Languages]
 Name: "english"; MessagesFile: "compiler:Default.isl"

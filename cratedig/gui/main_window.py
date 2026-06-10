@@ -355,7 +355,10 @@ class MainWindow(QMainWindow):
         self._operation_progress.hide()
         self._status_bar.addPermanentWidget(self._operation_progress)
         self._preview_timer = QTimer(self)
-        self._preview_timer.setInterval(150)
+        # 30 ms (~33 fps): playhead is time-driven, so a tight poll makes the
+        # cursor glide instead of stepping in 150 ms jumps. Repaint only redraws
+        # the cached waveform line, so this stays cheap.
+        self._preview_timer.setInterval(30)
         self._preview_timer.timeout.connect(self._poll_preview_playback)
 
         # --- worker thread ---

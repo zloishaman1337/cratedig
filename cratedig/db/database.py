@@ -39,6 +39,13 @@ class Database:
         self.conn = sqlite3.connect(str(self.path), check_same_thread=False)
         self.conn.row_factory = sqlite3.Row
         self.conn.execute("PRAGMA foreign_keys = ON")
+        # WAL + relaxed sync: bulk scan/analyze writes no longer fsync per commit,
+        # and readers (GUI) never block writers. Safe for personal single-user data.
+        try:
+            self.conn.execute("PRAGMA journal_mode = WAL")
+            self.conn.execute("PRAGMA synchronous = NORMAL")
+        except sqlite3.Error:
+            pass
         self._migrate()
 
     # --- schema ---------------------------------------------------------
@@ -90,8 +97,12 @@ class Database:
         self.close()
 
     # --- samples --------------------------------------------------------
-    def upsert_sample(self, s: Sample, vector: np.ndarray | None = None) -> int:
-        """Insert by unique path, or update the existing row. Returns id."""
+    def upsert_sample(self, s: Sample, vector: np.ndarray | None = None, commit: bool = True) -> int:
+        """Insert by unique path, or update the existing row. Returns id.
+
+        Pass commit=False during bulk scans and flush once per batch to avoid
+        one fsync per file.
+        """
         blob = vector.astype(np.float32).tobytes() if vector is not None else None
         dim = int(vector.shape[0]) if vector is not None else s.feature_dim
         now = _now()
@@ -131,9 +142,15 @@ class Database:
                     "created_at": s.created_at or now, "indexed_at": now,
                 },
             )
-            self.conn.commit()
+            if commit:
+                self.conn.commit()
             row = self.conn.execute("SELECT id FROM samples WHERE path=?", (s.path,)).fetchone()
             return int(row["id"])
+
+    def commit(self) -> None:
+        """Flush the current transaction (used after a batch of commit=False upserts)."""
+        with self.lock:
+            self.conn.commit()
 
     def get_sample(self, sample_id: int) -> Sample | None:
         with self.lock:
@@ -152,11 +169,17 @@ class Database:
             ).fetchall()
         return {int(row["id"]): Sample.from_row(row) for row in rows}
 
-    def all_samples(self, limit: int = 1000) -> list[Sample]:
+    def all_samples(self, limit: int | None = 1000) -> list[Sample]:
+        """Load samples newest-first. limit=None loads the whole library."""
         with self.lock:
-            rows = self.conn.execute(
-                "SELECT * FROM samples ORDER BY indexed_at DESC LIMIT ?", (limit,)
-            ).fetchall()
+            if limit is None:
+                rows = self.conn.execute(
+                    "SELECT * FROM samples ORDER BY indexed_at DESC"
+                ).fetchall()
+            else:
+                rows = self.conn.execute(
+                    "SELECT * FROM samples ORDER BY indexed_at DESC LIMIT ?", (limit,)
+                ).fetchall()
         return [Sample.from_row(r) for r in rows]
 
     def count_samples(self) -> int:

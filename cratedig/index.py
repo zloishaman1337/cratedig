@@ -6,6 +6,8 @@ details.
 
 from __future__ import annotations
 
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Callable
@@ -16,6 +18,11 @@ from .audio.category import classify_category, classify_instrument, classify_fro
 from .audio.features import FEATURE_DIM
 from .audio.similarity import cosine_topk, aspect_topk
 from .scan import scan_directory
+
+
+def _worker_count() -> int:
+    """Bounded thread pool size for CPU-bound librosa work (FFTs release the GIL)."""
+    return max(1, min(os.cpu_count() or 1, 8))
 
 
 def scan_libraries(
@@ -45,17 +52,24 @@ def analyze_pending(
 
     with db.lock:
         rows = db.conn.execute(
-            "SELECT id, path, duration_sec FROM samples "
+            "SELECT id, path, duration_sec, file_hash FROM samples "
             "WHERE feature_vector IS NULL OR feature_dim IS NULL OR feature_dim != ? "
             "OR waveform_preview IS NULL",
             (FEATURE_DIM,),
         ).fetchall()
+    if not rows:
+        return 0
     now = datetime.now(timezone.utc).isoformat(timespec="seconds")
-    done = 0
-    for r in rows:
-        sid, path, duration = int(r["id"]), r["path"], r["duration_sec"]
+    cache_dir = None
+    paths = getattr(cfg, "paths", None)
+    if paths is not None and getattr(paths, "db", None) is not None:
+        cache_dir = paths.db.parent / "waveform_cache"
+
+    def _process(r):
+        """Decode + analyze one file once; returns the UPDATE param tuple (or None)."""
+        sid, path, duration, file_hash = int(r["id"]), r["path"], r["duration_sec"], r["file_hash"]
         if not Path(path).is_file():
-            continue
+            return None
         d = analyze(path, sr=cfg.audio.analysis_sr)
         cat = classify_category(path) or None
         instr = classify_instrument(path) or None
@@ -63,27 +77,54 @@ def analyze_pending(
             fb_cat, fb_instr = classify_from_audio(duration, d.centroid_norm, d.zcr)
             cat = cat or fb_cat
             instr = instr or fb_instr
+        # Build the GUI's high-res mono preview now so the first editor open of a
+        # long sample is instant (no on-demand ffmpeg decode in the worker).
+        if cache_dir is not None:
+            try:
+                from .audio.playback import ensure_mono_preview_cache
+
+                ensure_mono_preview_cache(path, cache_dir, file_hash=file_hash)
+            except Exception:
+                pass
+        return (
+            d.bpm, d.musical_key, d.key_scale, d.loudness_lufs,
+            d.waveform_preview,
+            d.vector.astype("float32").tobytes() if d.vector is not None else None,
+            int(d.vector.shape[0]) if d.vector is not None else None,
+            now, cat, instr, sid,
+        )
+
+    # COALESCE keeps a previously-classified value when this pass yields None
+    # (cryptic filename + failed audio fallback), so re-analyze never wipes a
+    # good category/class.
+    update_sql = (
+        "UPDATE samples SET bpm=?, musical_key=?, key_scale=?, loudness_lufs=?, "
+        "waveform_preview=?, feature_vector=?, feature_dim=?, analyzed_at=?, "
+        "category=COALESCE(?, category), instrument_class=COALESCE(?, instrument_class) "
+        "WHERE id=?"
+    )
+    total = len(rows)
+    done = 0
+    batch: list[tuple] = []
+
+    def _flush() -> None:
+        if not batch:
+            return
         with db.lock:
-            db.conn.execute(
-                # COALESCE keeps a previously-classified value when this pass
-                # yields None (e.g. cryptic filename + failed audio fallback),
-                # so re-analyze never wipes a good category/class.
-                "UPDATE samples SET bpm=?, musical_key=?, key_scale=?, loudness_lufs=?, "
-                "waveform_preview=?, feature_vector=?, feature_dim=?, analyzed_at=?, "
-                "category=COALESCE(?, category), instrument_class=COALESCE(?, instrument_class) "
-                "WHERE id=?",
-                (
-                    d.bpm, d.musical_key, d.key_scale, d.loudness_lufs,
-                    d.waveform_preview,
-                    d.vector.astype("float32").tobytes() if d.vector is not None else None,
-                    int(d.vector.shape[0]) if d.vector is not None else None,
-                    now, cat, instr, sid,
-                ),
-            )
+            db.conn.executemany(update_sql, batch)
             db.conn.commit()
-        done += 1
-        if progress:
-            progress(done, len(rows))
+        batch.clear()
+
+    with ThreadPoolExecutor(max_workers=_worker_count()) as pool:
+        for params in pool.map(_process, rows):
+            if params is not None:
+                done += 1
+                batch.append(params)
+                if len(batch) >= 64:
+                    _flush()
+                if progress:
+                    progress(done, total)
+    _flush()
     return done
 
 
@@ -151,26 +192,34 @@ def tag_pending(
             """
         ).fetchall()
 
-    done = 0
-    for r in rows:
+    total = len(rows)
+
+    def _compute(r):
+        """Decode + derive tags for one file (pure CPU; no DB). Returns (sid, tags)."""
         sid, path = int(r["id"]), r["path"]
         if not Path(path).is_file():
-            continue
+            return None
         try:
             y_stereo, sr = librosa.load(path, sr=cfg.audio.analysis_sr, mono=False)
         except Exception:
-            continue
-        y_arr = getattr(y_stereo, "ndim", 0)
-        if y_arr == 2:
+            return None
+        if getattr(y_stereo, "ndim", 0) == 2:
             y_mono = y_stereo.mean(axis=0)
         else:
             y_mono = y_stereo
             y_stereo = None
-        tags = derive_character_tags(y_mono, y_stereo, sr)
-        db.set_auto_tags_for(sid, tags)
-        done += 1
-        if progress:
-            progress(done, len(rows))
+        return sid, derive_character_tags(y_mono, y_stereo, sr)
+
+    done = 0
+    with ThreadPoolExecutor(max_workers=_worker_count()) as pool:
+        for res in pool.map(_compute, rows):
+            if res is None:
+                continue
+            sid, tags = res
+            db.set_auto_tags_for(sid, tags)
+            done += 1
+            if progress:
+                progress(done, total)
     return done
 
 

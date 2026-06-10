@@ -105,7 +105,8 @@ def analyze(path: str, sr: int = 22050) -> Descriptors:
     with warnings.catch_warnings():
         warnings.filterwarnings("ignore", message=r"n_fft=.*too large.*")
         try:
-            d.vector = extract_features(path, sr=sr)
+            # Reuse the already-decoded buffer instead of re-loading the file.
+            d.vector = extract_features(path, sr=sr, y=y)
         except Exception:
             pass
 

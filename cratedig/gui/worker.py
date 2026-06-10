@@ -55,12 +55,24 @@ class IndexWorker(QObject):
             self._dm = DownloadManager(self._db, self._cfg)
         return self._dm
 
+    @staticmethod
+    def _library_load_limit() -> int | None:
+        """User-configured cap on samples loaded into the tree. 0/unset → None (all)."""
+        from PySide6.QtCore import QSettings
+        from .settings_tabs import _keys
+
+        raw = QSettings("cratedig", "cratedig").value(
+            _keys.LIBRARY_LOAD_LIMIT, _keys.DEFAULTS[_keys.LIBRARY_LOAD_LIMIT], type=int
+        )
+        return int(raw) if int(raw) > 0 else None
+
     @Slot()
     def request_reload(self) -> None:
         """Load all samples, build folder tree, and resolve favorites."""
         try:
+            limit = self._library_load_limit()
             with self._db.lock:
-                samples = self._db.all_samples()
+                samples = self._db.all_samples(limit=limit)
                 fav_rows = self._db.list_favorites("sample")
                 crates = self._db.list_crates()
 

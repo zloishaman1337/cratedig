@@ -131,7 +131,7 @@ def apply_app_theme(app: QApplication) -> None:
         }}
         #SidebarTitle {{
             color: {ACCENT};
-            font-size: 23px;
+            font-size: 18px;
             font-weight: 800;
             letter-spacing: 0;
         }}

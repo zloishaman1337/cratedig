@@ -118,10 +118,17 @@ def _scalar_features(librosa, y: np.ndarray, sr: int, rms: np.ndarray) -> np.nda
     )
 
 
-def extract_features(path: str, sr: int = 22050) -> np.ndarray:
-    """Return a weighted, L2-normalized float32 vector of length FEATURE_DIM."""
+def extract_features(path: str, sr: int = 22050, y: np.ndarray | None = None) -> np.ndarray:
+    """Return a weighted, L2-normalized float32 vector of length FEATURE_DIM.
+
+    Pass `y` (mono float samples already decoded at `sr`) to skip re-decoding the
+    file — the analyzer reuses the buffer it loaded for BPM/key/loudness.
+    """
     librosa = _require_librosa()
-    y, sr = librosa.load(path, sr=sr, mono=True)
+    if y is None:
+        y, sr = librosa.load(path, sr=sr, mono=True)
+    else:
+        y = np.asarray(y, dtype=np.float32)
     if y.size == 0:
         return np.zeros(FEATURE_DIM, dtype=np.float32)
 
