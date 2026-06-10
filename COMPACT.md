@@ -25,7 +25,7 @@ sessions skip the release stage entirely.
 | config | ✅ | TOML → typed Config (stdlib `tomllib`, read-only, frozen); `_default_config_path()` uses user data dir when frozen; `_seed_config_if_frozen()` copies bundled `config.example.toml` → user dir on first run |
 | config_writer | ✅ | **tomlkit** comment-preserving writer; `resolve_config_path()` delegates to `config._default_config_path()` for default branch; `load_document`/`write_document` (atomic temp+`os.replace`); seeds from `config.example.toml` if target missing |
 | paths | ✅ | `cratedig/paths.py`; `is_frozen()`, `user_data_dir()` (platformdirs), `resource_root()`/`resource_path(name)`, `bundled_binary(name)`, `ffmpeg_path()`/`ffplay_path()` (bundled-or-`shutil.which`) |
-| db | ✅ | WAL mode; `upsert_sample(..., commit=True)`; `Database.commit()` for batch flush; `all_samples(limit: int\|None)` |
+| db | ✅ | WAL mode; `upsert_sample(..., commit=True)`; `Database.commit()` for batch flush; `all_samples(limit: int\|None)`; `tags_for_all() -> dict[int, list[str]]` (one query, replaces N per-sample calls) |
 | scan | ✅ | `scan_directory` parallelized via `ThreadPoolExecutor`; DB upserts batched; prunes deleted files; builds waveform PCM cache |
 | audio.features/similarity | ✅ | 193-dim vector; `ASPECT_BLOCKS`; `aspect_topk`+`cosine_topk`; `extract_features(path, sr, y=None)` |
 | audio.analyzer | ✅ | BPM/key/loudness/waveform; `Descriptors` has `centroid_norm`+`zcr` |
@@ -40,7 +40,9 @@ sessions skip the release stage entirely.
 | tui | ✅ | collapsible Tree; breadcrumb+DataTable per folder; `b` fav; `u` duplicates |
 | gui | ✅ | Global dark redesign; all subsystems wired |
 | gui.main_window | ✅ | `_preview_timer` 30ms; `_on_config_written()` prompts restart; `_maybe_check_updates()` silent startup check (frozen only); unified download+install on both OS: Win → `os.startfile`+quit; mac → `updater.apply_dmg_update(path)`+quit |
+| gui.simpler_pane | ✅ | Waveform pan/zoom lag fixed: removed dead `_recompute()`/`_peaks` double-compute; rendered-edit peaks recompute only on zoom-span change; panning is pure view shift + repaint |
 | gui.update_check | ✅ | `UpdateCheckThread` (silent startup check) + `UpdateDownloadThread` (streams + minisign-verifies) |
+| gui.worker | ✅ | `request_reload()` uses `tags_for_all()` (batched, single query) instead of per-sample loop |
 | updater | ✅ | **ONLINE updater**. Pure layer: `FileEntry`/`UpdateManifest`/`ReleaseAsset`/`Release`, `sha256_file`, `manifest_sha256`, `build_update_zip_doc`, `load_update_manifest`, `is_newer`, `verify_payload`, `current_os`, `parse_release`, `select_asset`, `find_signature`. I/O: `fetch_latest_release`, `download_asset`, `minisign_path`, `verify_signature`, `download_and_verify`. macOS apply: `apply_update` (delta `.zip`), `apply_dmg_update` + `_write_dmg_restart_helper` (full `.dmg` mount→swap→relaunch). `GITHUB_REPO="zloishaman1337/cratedig"` hardcoded. `MINISIGN_PUBKEY` embedded (key id 54F217219B866BE6). |
 | als (parser) | ✅ | stdlib-only; `parse_als(path)→dict`; AU/VST2/VST3/M4L |
 | sources.* | ✅ | youtube/yandex/freesound/manager; `safe_filename`+`unique_path`; `ffmpeg_location` yt-dlp opt from `bundled_binary` when frozen |
@@ -55,11 +57,11 @@ sessions skip the release stage entirely.
 ## Packaging status
 | target | status | note |
 |---|---|---|
-| Windows onedir build | ✅ DONE 0.4.0 | `dist/cratedig/`; ~160.9 MB; minisign.exe bundled at `dist/cratedig/_internal/minisign.exe` |
-| Windows Inno installer | ✅ DONE 0.4.0 | `cratedig-setup-0.4.0.exe` ~160.9 MB signed; tier=FULL (minisign.exe is non-app-code binary → auto-full); per-user install; delta path = `cratedig-update.iss` |
-| Release manifests | ✅ win committed (4595560); mac pending commit | `cratedig-0.4.0-win.json` committed+pushed; `cratedig-0.4.0-mac.json` generated this session, PENDING commit. (`cratedig-0.3.0-win.json` = prior offline baseline) |
-| Windows GitHub release | ✅ published to GitHub release 0.4.0 (signed) | `cratedig-setup-0.4.0.exe` + `.minisig` attached; https://github.com/zloishaman1337/cratedig/releases/tag/0.4.0 |
-| macOS `.app` + `.dmg` | ✅ DONE 0.4.0 | `cratedig-0.4.0.dmg` ~171.6 MB signed, published to release 0.4.0; tier=FULL (no prior mac manifest to diff) |
+| Windows onedir build | ✅ DONE 0.4.1 | `dist/cratedig/`; ~160 MB |
+| Windows installer | ✅ DONE 0.4.1 | `cratedig-setup-0.4.1.exe` ~160 MB signed; tier=FULL; per-user install |
+| Release manifests | ✅ win committed (1d108c0); mac PENDING | `cratedig-0.4.1-win.json` committed+pushed; `cratedig-0.4.1-mac.json` PENDING Session 2 |
+| Windows GitHub release | ✅ published to GitHub release 0.4.1 (signed) | `cratedig-setup-0.4.1.exe` + `.minisig` attached; https://github.com/zloishaman1337/cratedig/releases/tag/0.4.1 |
+| macOS `.app` + `.dmg` | ⏳ PENDING 0.4.1 | full `.dmg` — Session 2 on a Mac |
 | GitHub Actions CI | ⏳ written, not run | `.github/workflows/release.yml` matrix; fires on tag |
 
 ## Gotchas
@@ -81,30 +83,37 @@ sessions skip the release stage entirely.
 - **Version is dual-SSOT-mirrored**: `pyproject.toml` (authoritative) AND `cratedig/__init__.__version__` (runtime). Bump BOTH together.
 - **pytest lives in `[dev]` extra** — build venv lacks it. Run `pip install -e ".[dev]"` before pytest.
 - **Updater manifest hash**: `updater.manifest_sha256` (canonical JSON, sorted keys) — never hand-roll a second hash.
-- **Baseline trap (0.4.0)**: 0.2/0.3 installs have no update checker — cannot auto-pull 0.4.0. Distribute 0.4.0 full installers manually. Auto-update works from 0.5.0 onward.
+- **Baseline trap (0.4.0)**: 0.2/0.3 installs have no update checker — cannot auto-pull 0.4.0+. Distribute full installers manually to those users. Auto-update works between 0.4.x releases.
 - **minisign.key in repo root, gitignored**. Back it up and copy to mac before Session 2. Password via `$env:MINISIGN_PASSWORD`. Never commit the key.
 - **GITHUB_REPO hardcoded** as `"zloishaman1337/cratedig"` — do not auto-detect from git remote.
-- **`DEFAULT_APP_PATHS` in make_manifest.py is conservative/untested vs a real code-only diff** — first delta release must validate it.
+- **PyInstaller rewrites `base_library.zip` every build** (churned sha256, identical size) — allowlisted in `make_manifest.py` `DEFAULT_APP_PATHS` so it doesn't force tier=full on code-only diffs.
 - **`apply_dmg_update` is macOS-only** — raises immediately on non-Darwin; off-platform guard tested in `tests/test_updater_online.py`.
+- **Online client still requests `tier="full"`** — `UpdateDownloadThread` calls `download_and_verify` with default `tier="full"`; delta-over-the-wire is not wired client-side yet (0.5.0+ backlog).
 
-## Verification
-- Full pytest: **846 passed, 0 failed** (apply_dmg_update off-darwin guard + restart-helper script-shape tests added in `tests/test_updater_online.py`).
-- v0.4.0 frozen `cratedig.exe` smoke-launched on Windows — alive 8s, no crash; startup auto-check ran silently (live feed latest = 0.2.0 < 0.4.0 → no update dialog).
-- `updater.verify_signature` against embedded `MINISIGN_PUBKEY` VERIFIED end-to-end for `cratedig-setup-0.4.0.exe`.
-- Live-feed verified post-publish: `updater.fetch_latest_release()` returns 0.4.0, selects win asset + .minisig; source archives absent from assets[].
-- macOS `.app` rebuilt + smoke-launched on macOS arm64 (Python 3.13) — alive 8s, clean exit. `cratedig-0.4.0.dmg` minisign-verified end-to-end vs embedded `MINISIGN_PUBKEY` ("Signature and comment signature verified"); published to GitHub release 0.4.0.
+## Verification (0.4.1)
+- Full pytest: **849 passed, 0 failed** (added: `test_tags_for_all_returns_sorted_map`, `test_tags_for_all_empty_database` in `tests/test_database.py`; `test_tier_delta_when_only_exe_and_base_library_change` in `tests/test_make_manifest.py`).
+- Frozen `dist/cratedig/cratedig.exe` (0.4.1) smoke-launched on Windows — alive 8s, clean stop.
+- `cratedig-setup-0.4.1.exe` minisign signature VERIFIED end-to-end against embedded `MINISIGN_PUBKEY` ("Signature and comment signature verified").
+- Live GitHub feed post-publish: `updater.fetch_latest_release()` returns 0.4.1; `is_newer(0.4.1, 0.4.0)` True; `select_asset(win, full)` → cratedig-setup-0.4.1.exe + .minisig; source archives absent. Running 0.4.0 will detect and offer 0.4.1 on startup.
 
-## macOS HANDOFF — none
+## macOS HANDOFF — PENDING
+- version: 0.4.1
+- tier: full   # online client still requests tier="full" (delta-over-the-wire not wired client-side); base_library.zip churn also forces full at build level. macOS diff is authoritative per UPDATE_RULES §3.
+- windows update: DONE (cratedig-setup-0.4.1.exe) — signed, published to GitHub release 0.4.1; commit 1d108c0, pushed
+- macos update: PENDING
+- source ref: 1d108c0 (main) — git pull before building
+- changed files: cratedig/gui/simpler_pane.py, cratedig/gui/worker.py, cratedig/db/database.py, packaging/make_manifest.py, pyproject.toml, cratedig/__init__.py; see git diff 1d108c0
+- new deps/assets: none (build_all.sh fetches the usual ffmpeg/ffplay/minisign)
+- build command: SIGN=1 PUBLISH=1 MINISIGN_PASSWORD=<pw> bash packaging/macos/build_all.sh 0.4.1
+- prerequisites: brew install minisign, minisign.key at repo root, gh auth login, $MINISIGN_PASSWORD set
+- notes: build the FULL cratedig-0.4.1.dmg, upload to the SAME release tag 0.4.1 (Win + mac share one tag). mac online client also requests full. Diff vs cratedig-0.4.0-mac.json, commit cratedig-0.4.1-mac.json. Smoke-launch the .app, then mark DONE + clear this handoff.
 
 ## Backlog
-- **0.4.0 distribute manually**: hand 0.4.0 full installers (BOTH `cratedig-setup-0.4.0.exe` and `cratedig-0.4.0.dmg`) to existing 0.2/0.3 users — they have no update checker and cannot auto-pull. Auto-update works from 0.5.0 onward.
-- **0.4.0 mac manifest commit PENDING**: commit `packaging/release-manifests/cratedig-0.4.0-mac.json` (user approves).
-- **Exercise the DELTA path on the NEXT code-only release** (after 0.4.0 baseline installed): build_all diffs vs 0.4.0 manifest → should emit `cratedig-update-<ver>.exe` (Win) / `-mac.zip` (mac). Validate `DEFAULT_APP_PATHS` allowlist in `make_manifest.py` against real diff.
-- **Future (0.5.0+)**: delta-over-the-wire path active for users on 0.4.0+ baseline; validate full delta apply+relaunch flow.
+- **0.4.0 distribute manually**: hand 0.4.0+ full installers to existing 0.2/0.3 users — they have no update checker. 0.4.1 auto-updates fine for anyone already on 0.4.0.
+- **Delta-over-the-wire (0.5.0+)**: wire client-side `tier="delta"` in `UpdateDownloadThread`/`download_and_verify` before a delta can ship online. Build-level delta detection already works (validated 0.4.0→0.4.1: `make_manifest diff` reports tier=delta for code-only change after base_library.zip allowlisted; still shipped FULL because client always requests full).
 - Exercise CI workflow (`.github/workflows/release.yml`) end-to-end on a pushed `v*` tag.
 - Optional: Windows EV code-signing cert and macOS notarization (Apple Dev ID $99/yr).
 - Consider hnswlib ANN for large libraries (brute force fine at personal scale).
-- **`worker.request_reload` still issues one `tags_for` query per sample** — batch if libraries grow very large.
 
 ## Authoritative files
 - `ARCHITECTURE.md` — full design + roadmap
