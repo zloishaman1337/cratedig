@@ -281,6 +281,22 @@ class Database:
             ).fetchall()
         return [r["name"] for r in rows]
 
+    def tags_for_all(self) -> dict[int, list[str]]:
+        """Return {sample_id: [tag names sorted]} for every tagged sample in one query.
+
+        Replaces N per-sample `tags_for` round-trips on tree reload.
+        """
+        with self.lock:
+            rows = self.conn.execute(
+                "SELECT st.sample_id AS sid, t.name AS name "
+                "FROM tags t JOIN sample_tags st ON st.tag_id=t.id "
+                "ORDER BY st.sample_id, t.name",
+            ).fetchall()
+        out: dict[int, list[str]] = {}
+        for r in rows:
+            out.setdefault(r["sid"], []).append(r["name"])
+        return out
+
     def remove_tag(self, sample_id: int, name: str) -> None:
         with self.lock:
             self.conn.execute(

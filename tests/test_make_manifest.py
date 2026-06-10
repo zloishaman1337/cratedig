@@ -45,6 +45,20 @@ def test_tier_delta_when_only_app_paths_change():
     assert mm.decide_tier(mm.diff_manifests(old, new), new) == "delta"
 
 
+def test_tier_delta_when_only_exe_and_base_library_change():
+    # PyInstaller rewrites base_library.zip every build (mtime churn, identical
+    # content/size); a code-only diff is exactly {cratedig.exe, base_library.zip}.
+    old = _manifest("0.4.0", {
+        "cratedig.exe": {"sha256": "a", "size": 100},
+        "_internal/base_library.zip": {"sha256": "z1", "size": 1401781},
+    })
+    new = _manifest("0.4.1", {
+        "cratedig.exe": {"sha256": "b", "size": 101},
+        "_internal/base_library.zip": {"sha256": "z2", "size": 1401781},
+    })
+    assert mm.decide_tier(mm.diff_manifests(old, new), new) == "delta"
+
+
 def test_tier_full_when_runtime_file_changes():
     old = _manifest("0.2.0", {"_internal/python311.dll": {"sha256": "a", "size": 100}})
     new = _manifest("0.3.0", {"_internal/python311.dll": {"sha256": "b", "size": 100}})

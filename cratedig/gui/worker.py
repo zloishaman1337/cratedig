@@ -91,7 +91,8 @@ class IndexWorker(QObject):
                 if s is not None:
                     favorites.append(s)
 
-            tags_by_id = {s.id: self._db.tags_for(s.id) for s in samples if s.id is not None}
+            tags_map = self._db.tags_for_all()
+            tags_by_id = {s.id: tags_map.get(s.id, []) for s in samples if s.id is not None}
             all_tags = self._db.all_tags()
             crate_samples_by_id = {crate.id: self._db.crate_samples(crate.id) for crate in crates}
 

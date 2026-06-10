@@ -66,7 +66,6 @@ class _WaveCanvas(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._mono: np.ndarray | None = None
-        self._peaks: list[tuple[float, float]] = []
         self._rendered_mono: np.ndarray | None = None
         self._rendered_peaks: list[tuple[float, float]] = []
         self._rendered_source_region: tuple[float, float] = (0.0, 0.0)
@@ -102,7 +101,6 @@ class _WaveCanvas(QWidget):
 
     def set_mono(self, mono: np.ndarray | None) -> None:
         self._mono = mono
-        self._recompute()
         self.update()
 
     def set_rendered_mono(self, mono: np.ndarray | None) -> None:
@@ -136,31 +134,22 @@ class _WaveCanvas(QWidget):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._recompute()
         self._recompute_rendered()
         self.update()
-
-    def _recompute(self) -> None:
-        if self._mono is None or self._mono.size == 0 or self.width() <= 0:
-            self._peaks = []
-            return
-        start, end = self.view
-        if self.duration > 0 and end > start:
-            n0 = int(max(0.0, start / self.duration) * self._mono.size)
-            n1 = int(min(1.0, end / self.duration) * self._mono.size)
-            visible = self._mono[n0:max(n0 + 1, n1)]
-        else:
-            visible = self._mono
-        self._peaks = compute_peaks(visible, self.width())
 
     def _set_view(self, start: float, span: float) -> None:
         if self.duration <= 0:
             return
         span = max(min(self.duration, _MIN_VIEW_SEC), min(self.duration, span))
         start = max(0.0, min(start, self.duration - span))
+        old_span = self.view[1] - self.view[0]
         self.view = (start, start + span)
-        self._recompute()
-        self._recompute_rendered()
+        # Rendered-edit peaks depend on the region's on-screen pixel width, i.e.
+        # the zoom span — not the pan offset. Recompute only when the span changes
+        # so panning is a pure view shift + repaint (source peaks are rebinned in
+        # paintEvent from the visible slice, which is already zoom-bounded).
+        if abs(span - old_span) > 1e-9:
+            self._recompute_rendered()
         self.update()
 
     # --- handle geometry ---
@@ -490,7 +479,7 @@ class _WaveCanvas(QWidget):
         mid = h / 2.0
         painter.fillRect(0, 0, w, h, QColor("#10141d"))
 
-        if not self._peaks:
+        if self._mono is None or self._mono.size == 0:
             painter.setPen(QPen(QColor(BORDER), 1))
             painter.drawLine(0, int(mid), w, int(mid))
             painter.end()

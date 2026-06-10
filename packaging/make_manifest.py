@@ -33,7 +33,13 @@ from cratedig import updater  # noqa: E402
 # Files an app-code-only release may change. In the PyInstaller onedir build the
 # Python source is frozen into the main executable's archive, so a code edit moves
 # the exe (and possibly our bundled data files) but none of the runtime libs.
-# Conservative on purpose — tune after observing the first real code-only diff.
+#
+# base_library.zip is allowlisted because PyInstaller rewrites it on EVERY build
+# with fresh zip-entry mtimes — the content (and byte size) stays identical, only
+# the sha256 churns. Observed validating the first real code-only diff (0.4.0 →
+# 0.4.1): the only changed files were cratedig.exe and _internal/base_library.zip.
+# A genuine stdlib/Python change moves the python3*.dll runtime libs too (not
+# allowlisted → still forces full), so this stays safe.
 DEFAULT_APP_PATHS = (
     "cratedig.exe",
     "cratedig",
@@ -42,6 +48,8 @@ DEFAULT_APP_PATHS = (
     "_internal/config.example.toml",
     "cratedig/db/schema.sql",
     "_internal/cratedig/db/schema.sql",
+    "_internal/base_library.zip",
+    "Contents/Frameworks/base_library.zip",
 )
 
 DELTA_SIZE_BUDGET = 40 * 1024 * 1024  # §7.2 escape hatch: bigger -> full

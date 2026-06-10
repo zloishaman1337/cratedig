@@ -187,6 +187,28 @@ def test_tags(tmp_path):
     db.close()
 
 
+def test_tags_for_all_returns_sorted_map(tmp_path):
+    db = Database(tmp_path / "t.db")
+    sid1 = db.upsert_sample(_sample("/a/t1.wav"))
+    sid2 = db.upsert_sample(_sample("/a/t2.wav"))
+    untagged = db.upsert_sample(_sample("/a/t3.wav"))
+    db.add_tag(sid1, "loop")
+    db.add_tag(sid1, "drums")
+    db.add_tag(sid2, "snare")
+    out = db.tags_for_all()
+    assert out == {sid1: ["drums", "loop"], sid2: ["snare"]}
+    assert untagged not in out  # untagged samples are absent from the map
+    # parity with the per-sample query it replaces
+    assert out[sid1] == db.tags_for(sid1)
+    db.close()
+
+
+def test_tags_for_all_empty_database(tmp_path):
+    db = Database(tmp_path / "t.db")
+    assert db.tags_for_all() == {}
+    db.close()
+
+
 def test_migration_adds_source_to_existing_sample_tags(tmp_path):
     path = tmp_path / "old_tags.db"
     conn = sqlite3.connect(path)
