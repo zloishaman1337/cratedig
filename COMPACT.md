@@ -59,9 +59,10 @@ sessions skip the release stage entirely.
 |---|---|---|
 | Windows onedir build | ✅ DONE 0.4.1 | `dist/cratedig/`; ~160 MB |
 | Windows installer | ✅ DONE 0.4.1 | `cratedig-setup-0.4.1.exe` ~160 MB signed; tier=FULL; per-user install |
-| Release manifests | ✅ win committed (1d108c0); mac PENDING | `cratedig-0.4.1-win.json` committed+pushed; `cratedig-0.4.1-mac.json` PENDING Session 2 |
+| Release manifests | ✅ DONE — both committed | `cratedig-0.4.1-win.json` (1d108c0) + `cratedig-0.4.1-mac.json` committed; mac diff vs 0.4.0-mac: changed=5 added=0 deleted=0 → tier=full |
 | Windows GitHub release | ✅ published to GitHub release 0.4.1 (signed) | `cratedig-setup-0.4.1.exe` + `.minisig` attached; https://github.com/zloishaman1337/cratedig/releases/tag/0.4.1 |
-| macOS `.app` + `.dmg` | ⏳ PENDING 0.4.1 | full `.dmg` — Session 2 on a Mac |
+| macOS `.app` + `.dmg` | ✅ DONE 0.4.1 | full `cratedig-0.4.1.dmg` (~171 MB) signed; published to GitHub release 0.4.1 |
+| macOS GitHub release | ✅ published to GitHub release 0.4.1 (signed) | `cratedig-0.4.1.dmg` + `.minisig` attached; https://github.com/zloishaman1337/cratedig/releases/tag/0.4.1; verified against embedded MINISIGN_PUBKEY |
 | GitHub Actions CI | ⏳ written, not run | `.github/workflows/release.yml` matrix; fires on tag |
 
 ## Gotchas
@@ -95,18 +96,10 @@ sessions skip the release stage entirely.
 - Frozen `dist/cratedig/cratedig.exe` (0.4.1) smoke-launched on Windows — alive 8s, clean stop.
 - `cratedig-setup-0.4.1.exe` minisign signature VERIFIED end-to-end against embedded `MINISIGN_PUBKEY` ("Signature and comment signature verified").
 - Live GitHub feed post-publish: `updater.fetch_latest_release()` returns 0.4.1; `is_newer(0.4.1, 0.4.0)` True; `select_asset(win, full)` → cratedig-setup-0.4.1.exe + .minisig; source archives absent. Running 0.4.0 will detect and offer 0.4.1 on startup.
+- macOS full `dist/cratedig.app` (0.4.1) smoke-launched — alive 6s+, clean quit (PID 51953).
+- `cratedig-0.4.1.dmg` minisign signature VERIFIED end-to-end ("Signature and comment signature verified", trusted comment "cratedig 0.4.1"). Live feed: `updater.fetch_latest_release()`→0.4.1; `select_asset(mac, full)`→cratedig-0.4.1.dmg + .minisig; no source archives; `is_newer(0.4.1,0.4.0)` True.
 
-## macOS HANDOFF — PENDING
-- version: 0.4.1
-- tier: full   # online client still requests tier="full" (delta-over-the-wire not wired client-side); base_library.zip churn also forces full at build level. macOS diff is authoritative per UPDATE_RULES §3.
-- windows update: DONE (cratedig-setup-0.4.1.exe) — signed, published to GitHub release 0.4.1; commit 1d108c0, pushed
-- macos update: PENDING
-- source ref: 1d108c0 (main) — git pull before building
-- changed files: cratedig/gui/simpler_pane.py, cratedig/gui/worker.py, cratedig/db/database.py, packaging/make_manifest.py, pyproject.toml, cratedig/__init__.py; see git diff 1d108c0
-- new deps/assets: none (build_all.sh fetches the usual ffmpeg/ffplay/minisign)
-- build command: SIGN=1 PUBLISH=1 MINISIGN_PASSWORD=<pw> bash packaging/macos/build_all.sh 0.4.1
-- prerequisites: brew install minisign, minisign.key at repo root, gh auth login, $MINISIGN_PASSWORD set
-- notes: build the FULL cratedig-0.4.1.dmg, upload to the SAME release tag 0.4.1 (Win + mac share one tag). mac online client also requests full. Diff vs cratedig-0.4.0-mac.json, commit cratedig-0.4.1-mac.json. Smoke-launch the .app, then mark DONE + clear this handoff.
+## macOS HANDOFF — none
 
 ## Backlog
 - **0.4.0 distribute manually**: hand 0.4.0+ full installers to existing 0.2/0.3 users — they have no update checker. 0.4.1 auto-updates fine for anyone already on 0.4.0.
