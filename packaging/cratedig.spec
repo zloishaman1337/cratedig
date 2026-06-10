@@ -20,11 +20,12 @@ VERSION = re.search(r'__version__\s*=\s*"([^"]+)"', _init).group(1)
 
 icon_file = str(SPECDIR / ("cratedig.ico" if IS_WIN else "cratedig.icns"))
 
-# Bundled ffmpeg/ffplay (CI / local places them in packaging/bin/<os>/).
+# Bundled ffmpeg/ffplay + minisign (CI / local places them in packaging/bin/<os>/).
+# minisign verifies the signed update manifest in the online updater.
 bin_dir = SPECDIR / "bin" / ("windows" if IS_WIN else "macos")
 exe_suffix = ".exe" if IS_WIN else ""
 binaries = []
-for tool in ("ffmpeg", "ffplay"):
+for tool in ("ffmpeg", "ffplay", "minisign"):
     p = bin_dir / f"{tool}{exe_suffix}"
     if p.exists():
         binaries.append((str(p), "."))

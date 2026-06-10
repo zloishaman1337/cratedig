@@ -33,6 +33,18 @@ for tool in ffmpeg ffplay; do
   fi
 done
 chmod +x packaging/bin/macos/ffmpeg packaging/bin/macos/ffplay
+
+echo "==> Bundled minisign (update verifier)"
+if [[ ! -x "packaging/bin/macos/minisign" ]]; then
+  if command -v minisign >/dev/null 2>&1; then
+    cp "$(command -v minisign)" packaging/bin/macos/minisign
+    chmod +x packaging/bin/macos/minisign
+    echo "    staged minisign from $(command -v minisign)"
+  else
+    echo "    WARNING: minisign not found — online update verification won't work."
+    echo "    Install it first:  brew install minisign"
+  fi
+fi
 # Strip quarantine so the bundled tools run inside an unsigned app.
 xattr -dr com.apple.quarantine packaging/bin/macos || true
 
@@ -67,6 +79,25 @@ else
   echo "==> DMG (full, v$VERSION)"
   bash packaging/macos/make_dmg.sh "$VERSION"
   OUT="dist/cratedig-${VERSION}.dmg"
+fi
+
+if [[ -n "${SIGN:-}" || -n "${PUBLISH:-}" ]]; then
+  echo "==> Sign asset (minisign)"
+  : "${MINISIGN_PASSWORD:?set MINISIGN_PASSWORD (the minisign.key password) before signing}"
+  [[ -f "$ROOT/minisign.key" ]] || { echo "minisign.key not found at $ROOT/minisign.key"; exit 1; }
+  printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -m "$OUT" -s "$ROOT/minisign.key" \
+    -x "$OUT.minisig" -c "cratedig $VERSION asset" -t "cratedig $VERSION"
+  echo "    signed: $OUT.minisig"
+fi
+
+if [[ -n "${PUBLISH:-}" ]]; then
+  echo "==> Publish to GitHub Releases (gh)"
+  if ! gh release view "$VERSION" >/dev/null 2>&1; then
+    gh release create "$VERSION" --title "CRATEDIG $VERSION" \
+      --notes "cratedig $VERSION (online-update baseline)."
+  fi
+  gh release upload "$VERSION" "$OUT" "$OUT.minisig" --clobber
+  echo "    published $VERSION"
 fi
 
 echo

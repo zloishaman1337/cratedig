@@ -161,3 +161,115 @@ def test_current_os_unsupported_raises(monkeypatch):
     monkeypatch.setattr(updater.sys, "platform", "linux")
     with pytest.raises(updater.UpdateError):
         updater.current_os()
+
+
+# --------------------------------------------------------------------------- #
+# I/O layer (network + verify) with injected fakes                            #
+# --------------------------------------------------------------------------- #
+
+import io
+import json
+import contextlib
+
+
+@contextlib.contextmanager
+def _fake_response(payload: bytes):
+    yield io.BytesIO(payload)
+
+
+def test_fetch_latest_release_parses(monkeypatch):
+    doc = _api_doc()
+
+    def opener(req, timeout=None):
+        # the request must target the hardcoded feed URL
+        assert req.full_url == updater.LATEST_RELEASE_API
+        return _fake_response(json.dumps(doc).encode("utf-8"))
+
+    rel = updater.fetch_latest_release(opener=opener)
+    assert rel.version == "0.4.0"
+
+
+def test_fetch_latest_release_network_error_raises():
+    def opener(req, timeout=None):
+        raise OSError("no route to host")
+
+    with pytest.raises(updater.UpdateError):
+        updater.fetch_latest_release(opener=opener)
+
+
+def test_fetch_latest_release_bad_json_raises():
+    def opener(req, timeout=None):
+        return _fake_response(b"<html>not json</html>")
+
+    with pytest.raises(updater.UpdateError):
+        updater.fetch_latest_release(opener=opener)
+
+
+def test_download_asset_writes_and_checks_size(tmp_path):
+    body = b"x" * 1024
+    asset = updater.ReleaseAsset(name="cratedig-setup-0.4.0.exe", download_url="http://h/a", size=len(body))
+
+    def opener(req, timeout=None):
+        return _fake_response(body)
+
+    out = updater.download_asset(asset, tmp_path, opener=opener)
+    assert out.read_bytes() == body
+
+
+def test_download_asset_size_mismatch_raises(tmp_path):
+    asset = updater.ReleaseAsset(name="a.exe", download_url="http://h/a", size=999)
+
+    def opener(req, timeout=None):
+        return _fake_response(b"short")
+
+    with pytest.raises(updater.UpdateError):
+        updater.download_asset(asset, tmp_path, opener=opener)
+
+
+class _Proc:
+    def __init__(self, rc, err=""):
+        self.returncode = rc
+        self.stderr = err
+        self.stdout = ""
+
+
+def test_verify_signature_ok(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "minisign_path", lambda: "minisign")
+    f = tmp_path / "a.exe"; f.write_bytes(b"data")
+    s = tmp_path / "a.exe.minisig"; s.write_text("sig")
+    captured = {}
+
+    def runner(cmd, capture_output=None, text=None):
+        captured["cmd"] = cmd
+        return _Proc(0)
+
+    updater.verify_signature(f, s, runner=runner)
+    assert "-V" in captured["cmd"] and updater.MINISIGN_PUBKEY in captured["cmd"]
+
+
+def test_verify_signature_bad_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater, "minisign_path", lambda: "minisign")
+    f = tmp_path / "a.exe"; f.write_bytes(b"data")
+    s = tmp_path / "a.exe.minisig"; s.write_text("sig")
+
+    def runner(cmd, capture_output=None, text=None):
+        return _Proc(1, err="Signature verification failed")
+
+    with pytest.raises(updater.UpdateError):
+        updater.verify_signature(f, s, runner=runner)
+
+
+def test_download_and_verify_happy_path(monkeypatch, tmp_path):
+    rel = updater.parse_release(_api_doc())
+    monkeypatch.setattr(updater, "minisign_path", lambda: "minisign")
+
+    def fake_download(asset, dest_dir, **kw):
+        p = tmp_path / asset.name
+        p.write_bytes(b"payload")
+        return p
+
+    monkeypatch.setattr(updater, "download_asset", fake_download)
+    monkeypatch.setattr(updater, "verify_signature", lambda *a, **k: None)
+
+    out = updater.download_and_verify(rel, tmp_path, os_name="win", tier="full")
+    assert out.name == "cratedig-setup-0.4.0.exe"

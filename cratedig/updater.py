@@ -18,9 +18,12 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shutil
 import subprocess
 import sys
 import tempfile
+import urllib.error
+import urllib.request
 import zipfile
 from dataclasses import dataclass
 from pathlib import Path
@@ -45,6 +48,15 @@ _ASSET_NAMES = {
     ("mac", "delta"): "cratedig-update-{v}-mac.zip",
 }
 SIGNATURE_SUFFIX = ".minisig"
+
+# Embedded minisign public key (key id 54F217219B866BE6). The private key never
+# enters the repo (gitignored *.key); only this verify key ships in the app.
+MINISIGN_PUBKEY = "RWTma4abIRfyVE98O2Yw9XrQgiA4cUNoIO3qlBh895YT3fUIqxaFsaA2"
+
+_HTTP_HEADERS = {
+    "User-Agent": "cratedig-updater",
+    "Accept": "application/vnd.github+json",
+}
 
 
 class UpdateError(Exception):
@@ -262,6 +274,117 @@ def find_signature(release: Release, asset: ReleaseAsset) -> ReleaseAsset:
         if a.name == want:
             return a
     raise UpdateError(f"release {release.version} is missing signature {want!r}")
+
+
+# --------------------------------------------------------------------------- #
+# Online feed I/O (network + minisign verify; injectable for tests)            #
+# --------------------------------------------------------------------------- #
+
+def fetch_latest_release(
+    url: str = LATEST_RELEASE_API,
+    *,
+    timeout: float = 15.0,
+    opener=urllib.request.urlopen,
+) -> Release:
+    """GET the GitHub latest-release JSON and parse it. The ONLY network call in
+    the check path. Raises :class:`UpdateError` on any transport/parse failure."""
+    req = urllib.request.Request(url, headers=_HTTP_HEADERS)
+    try:
+        with opener(req, timeout=timeout) as resp:
+            data = resp.read()
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise UpdateError(f"could not reach the update feed: {exc}") from exc
+    try:
+        doc = json.loads(data.decode("utf-8"))
+    except (json.JSONDecodeError, UnicodeDecodeError) as exc:
+        raise UpdateError(f"update feed returned invalid JSON: {exc}") from exc
+    return parse_release(doc)
+
+
+def download_asset(
+    asset: ReleaseAsset,
+    dest_dir: str | os.PathLike[str],
+    *,
+    timeout: float = 120.0,
+    opener=urllib.request.urlopen,
+) -> Path:
+    """Stream a release asset into ``dest_dir``; verify the byte size; return path."""
+    dest = Path(dest_dir) / asset.name
+    req = urllib.request.Request(asset.download_url, headers=_HTTP_HEADERS)
+    try:
+        with opener(req, timeout=timeout) as resp, open(dest, "wb") as fh:
+            shutil.copyfileobj(resp, fh, length=1 << 20)
+    except (urllib.error.URLError, OSError, TimeoutError) as exc:
+        raise UpdateError(f"could not download {asset.name}: {exc}") from exc
+    if asset.size and dest.stat().st_size != asset.size:
+        raise UpdateError(
+            f"downloaded {asset.name} size mismatch "
+            f"({dest.stat().st_size} != {asset.size})"
+        )
+    return dest
+
+
+def minisign_path() -> str:
+    """Locate the minisign verifier: bundled binary first, else PATH. Raise if absent."""
+    name = "minisign.exe" if sys.platform == "win32" else "minisign"
+    try:
+        from .paths import bundled_binary
+
+        bundled = bundled_binary(name)
+    except Exception:  # paths import may fail in stripped test envs
+        bundled = None
+    if bundled:
+        return str(bundled)
+    found = shutil.which("minisign")
+    if found:
+        return found
+    raise UpdateError(
+        "minisign not found — bundle it in packaging/bin/<os>/ or install it on PATH"
+    )
+
+
+def verify_signature(
+    file_path: str | os.PathLike[str],
+    sig_path: str | os.PathLike[str],
+    pubkey: str = MINISIGN_PUBKEY,
+    *,
+    runner=subprocess.run,
+) -> None:
+    """Verify ``file_path`` against ``sig_path`` with the embedded minisign key.
+
+    Raises :class:`UpdateError` on a bad/missing signature. No network.
+    """
+    exe = minisign_path()
+    try:
+        proc = runner(
+            [exe, "-V", "-P", pubkey, "-m", str(file_path), "-x", str(sig_path)],
+            capture_output=True,
+            text=True,
+        )
+    except OSError as exc:
+        raise UpdateError(f"could not run minisign: {exc}") from exc
+    if proc.returncode != 0:
+        detail = (proc.stderr or proc.stdout or "").strip()
+        raise UpdateError(f"signature verification failed: {detail}")
+
+
+def download_and_verify(
+    release: Release,
+    dest_dir: str | os.PathLike[str],
+    *,
+    os_name: str | None = None,
+    tier: str = "full",
+) -> Path:
+    """Download the OS asset + its ``.minisig``, verify the signature, return the
+    asset path. Combines :func:`select_asset`, :func:`download_asset` and
+    :func:`verify_signature` — the full trusted-download path."""
+    target_os = os_name or current_os()
+    asset = select_asset(release, target_os, tier)
+    sig = find_signature(release, asset)
+    asset_path = download_asset(asset, dest_dir)
+    sig_path = download_asset(sig, dest_dir)
+    verify_signature(asset_path, sig_path)
+    return asset_path
 
 
 # --------------------------------------------------------------------------- #

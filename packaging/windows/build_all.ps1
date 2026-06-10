@@ -8,7 +8,13 @@
 #
 # Version SSOT is pyproject.toml; pass [version] explicitly (UPDATE_RULES.md §2).
 [CmdletBinding()]
-param([string]$Version = "0.1.0")
+param(
+    [string]$Version = "0.1.0",
+    # Sign the installer with minisign (requires $env:MINISIGN_PASSWORD + minisign.key in repo root).
+    [switch]$Sign,
+    # Publish the signed assets to GitHub Releases via `gh` (implies -Sign).
+    [switch]$Publish
+)
 
 $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
@@ -25,6 +31,20 @@ foreach ($tool in @("ffmpeg.exe", "ffplay.exe")) {
     if (-not (Test-Path (Join-Path $bin $tool))) {
         Write-Warning "Missing $bin\$tool — bundled playback/decoding will fall back to PATH. " +
             "Stage static Windows builds there before release (git-ignored)."
+    }
+}
+
+Write-Host "==> Bundled minisign (update verifier)"
+$minisignDest = Join-Path $bin "minisign.exe"
+if (-not (Test-Path $minisignDest)) {
+    $src = (Get-Command minisign -ErrorAction SilentlyContinue).Source
+    if ($src) {
+        New-Item -ItemType Directory -Force $bin | Out-Null
+        Copy-Item $src $minisignDest
+        Write-Host "    staged minisign.exe from $src"
+    } else {
+        Write-Warning "minisign not found on PATH — online update verification won't work. " +
+            "Install it (winget install jedisct1.minisign) before release."
     }
 }
 
@@ -71,8 +91,39 @@ if ($tier -eq "delta") {
     $out = "packaging\windows\Output\cratedig-setup-$Version.exe"
 }
 
+if ($Sign -or $Publish) {
+    Write-Host "==> Sign installer (minisign)"
+    if (-not $env:MINISIGN_PASSWORD) {
+        throw "Set `$env:MINISIGN_PASSWORD before signing (the minisign.key password)."
+    }
+    $key = Join-Path $Root "minisign.key"
+    if (-not (Test-Path $key)) { throw "minisign.key not found at $key." }
+    $sig = "$out.minisig"
+    # minisign reads the key password from stdin; -t stamps a trusted comment.
+    $env:MINISIGN_PASSWORD | minisign -S -m $out -s $key -x $sig `
+        -c "cratedig $Version installer" -t "cratedig $Version"
+    if ($LASTEXITCODE -ne 0) { throw "minisign signing failed." }
+    Write-Host "    signed: $sig"
+}
+
+if ($Publish) {
+    Write-Host "==> Publish to GitHub Releases (gh)"
+    $tag = $Version
+    $title = "CRATEDIG $Version"
+    # Create the release if absent, then upload the installer + signature.
+    gh release view $tag 2>$null
+    if ($LASTEXITCODE -ne 0) {
+        gh release create $tag --title $title --notes "cratedig $Version (online-update baseline)."
+        if ($LASTEXITCODE -ne 0) { throw "gh release create failed." }
+    }
+    gh release upload $tag $out "$out.minisig" --clobber
+    if ($LASTEXITCODE -ne 0) { throw "gh release upload failed." }
+    Write-Host "    published $tag"
+}
+
 Write-Host ""
 Write-Host "Done ($tier):"
 Write-Host "  dist\cratedig\"
 Write-Host "  $newManifest"
 Write-Host "  $out"
+if ($Sign -or $Publish) { Write-Host "  $out.minisig" }

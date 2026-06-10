@@ -445,6 +445,11 @@ class MainWindow(QMainWindow):
         # Initial data load — invoke on worker thread via queued call
         QMetaObject.invokeMethod(self._worker, "request_reload", Qt.ConnectionType.QueuedConnection)
 
+        # Online update check (GitHub feed). Frozen builds only; silent unless newer.
+        self._update_check = None
+        self._update_download = None
+        self._maybe_check_updates()
+
     # --- slots ---
 
     def _on_tree_ready(
@@ -623,6 +628,73 @@ class MainWindow(QMainWindow):
             "Updating",
             "Update verified. cratedig will close, apply the update, and relaunch.",
         )
+        QApplication.quit()
+
+    def _maybe_check_updates(self) -> None:
+        """Kick off a silent startup update check (frozen builds only)."""
+        import sys
+
+        if not getattr(sys, "frozen", False):
+            return
+        from .update_check import UpdateCheckThread
+
+        self._update_check = UpdateCheckThread(self)
+        self._update_check.found.connect(self._on_update_available)
+        self._update_check.start()
+
+    def _on_update_available(self, release) -> None:
+        import sys
+
+        import cratedig
+        from cratedig import updater
+        from PySide6.QtWidgets import QMessageBox
+
+        box = QMessageBox(self)
+        box.setWindowTitle("Update available")
+        box.setText(
+            f"cratedig {release.version} is available (you have {cratedig.__version__})."
+        )
+        box.setStandardButtons(
+            QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
+        )
+        if sys.platform == "win32":
+            box.setInformativeText(
+                "Download and install it now? The app will close, update, and relaunch."
+            )
+            if box.exec() == QMessageBox.StandardButton.Yes:
+                self._start_update_download(release)
+        else:
+            from PySide6.QtCore import QUrl
+            from PySide6.QtGui import QDesktopServices
+
+            box.setInformativeText("Open the download page?")
+            if box.exec() == QMessageBox.StandardButton.Yes:
+                QDesktopServices.openUrl(
+                    QUrl(f"https://github.com/{updater.GITHUB_REPO}/releases/latest")
+                )
+
+    def _start_update_download(self, release) -> None:
+        from .update_check import UpdateDownloadThread
+
+        self._toasts.show(f"Downloading update {release.version}…", "info")
+        self._update_download = UpdateDownloadThread(release, self)
+        self._update_download.done.connect(self._on_update_downloaded)
+        self._update_download.failed.connect(
+            lambda msg: self._toasts.show(f"Update failed: {msg}", "error")
+        )
+        self._update_download.start()
+
+    def _on_update_downloaded(self, installer_path: str) -> None:
+        import os
+
+        from PySide6.QtWidgets import QApplication, QMessageBox
+
+        QMessageBox.information(
+            self,
+            "Updating",
+            "Update verified. cratedig will close and the installer will relaunch it.",
+        )
+        os.startfile(installer_path)  # Inno installer closes app, updates, relaunches
         QApplication.quit()
 
     def _on_config_written(self) -> None:
