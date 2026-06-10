@@ -57,9 +57,9 @@ sessions skip the release stage entirely.
 |---|---|---|
 | Windows onedir build | ✅ DONE 0.4.0 | `dist/cratedig/`; ~160.9 MB; minisign.exe bundled at `dist/cratedig/_internal/minisign.exe` |
 | Windows Inno installer | ✅ DONE 0.4.0 | `cratedig-setup-0.4.0.exe` ~160.9 MB signed; tier=FULL (minisign.exe is non-app-code binary → auto-full); per-user install; delta path = `cratedig-update.iss` |
-| Release manifests | ✅ committed (4595560, pushed) | `cratedig-0.4.0-win.json` committed on main; pushed to origin. (`cratedig-0.3.0-win.json` = prior offline baseline) |
+| Release manifests | ✅ win committed (4595560); mac pending commit | `cratedig-0.4.0-win.json` committed+pushed; `cratedig-0.4.0-mac.json` generated this session, PENDING commit. (`cratedig-0.3.0-win.json` = prior offline baseline) |
 | Windows GitHub release | ✅ published to GitHub release 0.4.0 (signed) | `cratedig-setup-0.4.0.exe` + `.minisig` attached; https://github.com/zloishaman1337/cratedig/releases/tag/0.4.0 |
-| macOS `.app` + `.dmg` | ⏳ PENDING (0.4.0) | last built 0.1.0; 0.4.0 full .dmg = first online-capable mac build |
+| macOS `.app` + `.dmg` | ✅ DONE 0.4.0 | `cratedig-0.4.0.dmg` ~171.6 MB signed, published to release 0.4.0; tier=FULL (no prior mac manifest to diff) |
 | GitHub Actions CI | ⏳ written, not run | `.github/workflows/release.yml` matrix; fires on tag |
 
 ## Gotchas
@@ -92,20 +92,13 @@ sessions skip the release stage entirely.
 - v0.4.0 frozen `cratedig.exe` smoke-launched on Windows — alive 8s, no crash; startup auto-check ran silently (live feed latest = 0.2.0 < 0.4.0 → no update dialog).
 - `updater.verify_signature` against embedded `MINISIGN_PUBKEY` VERIFIED end-to-end for `cratedig-setup-0.4.0.exe`.
 - Live-feed verified post-publish: `updater.fetch_latest_release()` returns 0.4.0, selects win asset + .minisig; source archives absent from assets[].
-- macOS `.app` NOT yet rebuilt (0.4.0 Session 2 pending).
+- macOS `.app` rebuilt + smoke-launched on macOS arm64 (Python 3.13) — alive 8s, clean exit. `cratedig-0.4.0.dmg` minisign-verified end-to-end vs embedded `MINISIGN_PUBKEY` ("Signature and comment signature verified"); published to GitHub release 0.4.0.
 
-## macOS HANDOFF — PENDING
-- version: 0.4.0
-- tier: full   # first online-capable build; no prior mac manifest to diff against; must be full
-- windows update: DONE — `cratedig-setup-0.4.0.exe` signed, published to GitHub release 0.4.0 (signed); commit 4595560, pushed to origin
-- macos update: PENDING
-- build command: `SIGN=1 PUBLISH=1 MINISIGN_PASSWORD=<pw> bash packaging/macos/build_all.sh 0.4.0`
-- prerequisites: `brew install minisign` (done), `minisign.key` copied to mac repo root (done), `gh auth login`, `$MINISIGN_PASSWORD` set
-- notes: Win-then-mac order; both OS builds must go to the same GitHub release tag. Win build is ready; mac Session 2 uploads .dmg + .minisig to same release. Baseline trap: 0.2/0.3 can't auto-pull — distribute 0.4.0 full installers manually.
+## macOS HANDOFF — none
 
 ## Backlog
-- **0.4.0 Session 1 remaining**: distribute 0.4.0 full installer manually to existing 0.2/0.3 users (they cannot auto-update). Commit + push + publish are DONE (commit 4595560).
-- **0.4.0 Session 2 (macOS)**: see HANDOFF block above.
+- **0.4.0 distribute manually**: hand 0.4.0 full installers (BOTH `cratedig-setup-0.4.0.exe` and `cratedig-0.4.0.dmg`) to existing 0.2/0.3 users — they have no update checker and cannot auto-pull. Auto-update works from 0.5.0 onward.
+- **0.4.0 mac manifest commit PENDING**: commit `packaging/release-manifests/cratedig-0.4.0-mac.json` (user approves).
 - **Exercise the DELTA path on the NEXT code-only release** (after 0.4.0 baseline installed): build_all diffs vs 0.4.0 manifest → should emit `cratedig-update-<ver>.exe` (Win) / `-mac.zip` (mac). Validate `DEFAULT_APP_PATHS` allowlist in `make_manifest.py` against real diff.
 - **Future (0.5.0+)**: delta-over-the-wire path active for users on 0.4.0+ baseline; validate full delta apply+relaunch flow.
 - Exercise CI workflow (`.github/workflows/release.yml`) end-to-end on a pushed `v*` tag.
