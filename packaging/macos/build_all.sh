@@ -42,13 +42,38 @@ python packaging/render_icons.py
 echo "==> PyInstaller (.app)"
 pyinstaller packaging/cratedig.spec --noconfirm
 
-echo "==> DMG"
-bash packaging/macos/make_dmg.sh "$VERSION"
+echo "==> Release manifest (v$VERSION)"
+MANIFEST_DIR="packaging/release-manifests"
+mkdir -p "$MANIFEST_DIR"
+NEW_MANIFEST="$MANIFEST_DIR/cratedig-$VERSION-mac.json"
+python packaging/make_manifest.py generate dist/cratedig.app "$VERSION" mac "$NEW_MANIFEST"
+
+# Pick the previous mac manifest (newest that isn't this one) to diff against.
+PREV="$(ls "$MANIFEST_DIR"/cratedig-*-mac.json 2>/dev/null | grep -v "$NEW_MANIFEST" \
+        | sort -V | tail -n 1 || true)"
+
+TIER="full"
+if [[ -n "$PREV" ]]; then
+  DIFF_OUT="$(python packaging/make_manifest.py diff "$PREV" "$NEW_MANIFEST")"
+  echo "$DIFF_OUT" | sed 's/^/    /'
+  if echo "$DIFF_OUT" | grep -q 'tier=delta'; then TIER="delta"; fi
+fi
+
+if [[ "$TIER" == "delta" ]]; then
+  echo "==> macOS DELTA update zip (v$VERSION)"
+  OUT="dist/cratedig-update-${VERSION}-mac.zip"
+  python packaging/make_manifest.py build-delta-zip "$PREV" "$NEW_MANIFEST" dist/cratedig.app "$OUT"
+else
+  echo "==> DMG (full, v$VERSION)"
+  bash packaging/macos/make_dmg.sh "$VERSION"
+  OUT="dist/cratedig-${VERSION}.dmg"
+fi
 
 echo
-echo "Done:"
+echo "Done ($TIER):"
 echo "  dist/cratedig.app"
-echo "  dist/cratedig-${VERSION}.dmg"
+echo "  $NEW_MANIFEST"
+echo "  $OUT"
 echo
 echo "Unsigned build. On the target Mac, first launch = right-click the app -> Open,"
 echo "or run:  xattr -dr com.apple.quarantine /Applications/cratedig.app"

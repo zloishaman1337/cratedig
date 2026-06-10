@@ -34,14 +34,45 @@ Write-Host "==> Render icons (.ico)"
 Write-Host "==> PyInstaller (onedir)"
 & .\.venv\Scripts\pyinstaller.exe packaging\cratedig.spec --noconfirm
 
-Write-Host "==> Inno Setup installer (v$Version)"
 $iscc = Join-Path $env:LOCALAPPDATA "Programs\Inno Setup 6\ISCC.exe"
 if (-not (Test-Path $iscc)) {
     throw "ISCC.exe not found at $iscc. Install Inno Setup 6 (winget install JRSoftware.InnoSetup)."
 }
-& $iscc "/DVersion=$Version" "packaging\windows\cratedig.iss"
+$py = ".\.venv\Scripts\python.exe"
+
+Write-Host "==> Release manifest (v$Version)"
+$manifestDir = Join-Path $Root "packaging\release-manifests"
+New-Item -ItemType Directory -Force $manifestDir | Out-Null
+$newManifest = Join-Path $manifestDir "cratedig-$Version-win.json"
+& $py packaging\make_manifest.py generate dist\cratedig $Version win $newManifest
+
+# Pick the previous win manifest (newest version that isn't this one) to diff against.
+$prev = Get-ChildItem $manifestDir -Filter "cratedig-*-win.json" |
+    Where-Object { $_.FullName -ne $newManifest } |
+    Sort-Object { [version]([regex]::Match($_.Name, 'cratedig-(.+)-win\.json').Groups[1].Value) } |
+    Select-Object -Last 1
+
+$tier = "full"
+if ($prev) {
+    $diff = & $py packaging\make_manifest.py diff $prev.FullName $newManifest
+    $diff | ForEach-Object { Write-Host "    $_" }
+    if ($diff -match 'tier=delta') { $tier = "delta" }
+}
+
+if ($tier -eq "delta") {
+    Write-Host "==> Windows DELTA update installer (v$Version)"
+    $include = Join-Path $Root "packaging\windows\update-files.iss"
+    & $py packaging\make_manifest.py build-win-include $prev.FullName $newManifest $include
+    & $iscc "/DVersion=$Version" "packaging\windows\cratedig-update.iss"
+    $out = "packaging\windows\Output\cratedig-update-$Version.exe"
+} else {
+    Write-Host "==> Windows FULL installer (v$Version)"
+    & $iscc "/DVersion=$Version" "packaging\windows\cratedig.iss"
+    $out = "packaging\windows\Output\cratedig-setup-$Version.exe"
+}
 
 Write-Host ""
-Write-Host "Done:"
+Write-Host "Done ($tier):"
 Write-Host "  dist\cratedig\"
-Write-Host "  packaging\windows\Output\cratedig-setup-$Version.exe"
+Write-Host "  $newManifest"
+Write-Host "  $out"

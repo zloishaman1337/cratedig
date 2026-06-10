@@ -12,7 +12,7 @@ committed release manifest (`packaging/release-manifests/`). **Delta delivery is
 Windows delta = small Inno update installer `cratedig-update-<ver>.exe` (user double-clicks;
 external process closes app, swaps locked files, relaunches — no in-app code).
 macOS delta = `.zip` applied in-app via **Help → "Apply update from file…"**
-(`cratedig/updater.py`, planned) + a restart helper that swaps files after app exits.
+(`cratedig/updater.py`, IMPLEMENTED 0.3.0) + bash restart helper that swaps files after app exits.
 App NEVER contacts a server — user supplies the update file manually.
 Win-then-mac two-session order. Meta/tooling-only sessions skip the release stage entirely.
 
@@ -59,6 +59,7 @@ Win-then-mac two-session order. Meta/tooling-only sessions skip the release stag
 | sources.freesound | ✅ | proxy-bypass session; `safe_filename`+`unique_path` |
 | sources.manager | ✅ | samples→FreeSound; tracks→merged Yandex+YouTube; MusicBrainz/Discogs incremental-cache ranking |
 | metadata (mb/discogs) | ✅ | core wiring done; incremental `metadata_cache`; `rank_track_hits(..., force_live=False)` |
+| updater | ✅ | **OFFLINE updater** (UPDATE_RULES §7). Pure logic (cross-platform, tested): `FileEntry`/`UpdateManifest`, `sha256_file`, `manifest_sha256` (canonical JSON), `build_update_zip_doc`, `load_update_manifest`, `is_newer`, `check_compatible`, `verify_payload`. macOS side-effects: `apply_update` → extract+verify → spawn dependency-free bash restart helper (waits for app exit, `ditto` swap, relaunch). Windows uses external Inno update `.exe` instead. NO network. |
 
 ## Stack decisions
 - Python + PySide6/Textual; librosa+cosine kNN; download = yt-dlp + yandex-music + freesound.
@@ -71,9 +72,10 @@ Win-then-mac two-session order. Meta/tooling-only sessions skip the release stag
 ## Packaging status
 | target | status | note |
 |---|---|---|
-| Windows onedir build | ✅ DONE | `dist/cratedig/` ~572 MB, exe 28.0 MB; v0.2.0; librosa/numba/llvmlite bundle OK on Python 3.13.5/PyInstaller 6.20.0 |
-| Windows Inno installer | ✅ DONE | `packaging/windows/Output/cratedig-setup-0.2.0.exe` 160 MB; **per-user install** (`PrivilegesRequired=lowest`, `{localappdata}\Programs\cratedig`); `ISCC.exe` at `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe` |
-| macOS `.app` + `.dmg` | ✅ DONE (0.1.0) | built on Apple Silicon (arm64); **NOT rebuilt this session** — still at 0.1.0; needs Mac rebuild for 0.2.0 source changes; see macOS HANDOFF block below |
+| Windows onedir build | ✅ DONE | `dist/cratedig/`; v0.3.0; librosa/numba/llvmlite bundle OK on Python 3.13.5/PyInstaller 6.20.0 |
+| Windows Inno installer | ✅ DONE | `cratedig-setup-0.3.0.exe` 160.7 MB (full tier — updater baseline); per-user install; `ISCC.exe` at `%LOCALAPPDATA%\Programs\Inno Setup 6\ISCC.exe`; delta path = `cratedig-update.iss` (built only when a prior manifest diffs to delta) |
+| Release manifests | ✅ | `packaging/release-manifests/cratedig-0.3.0-win.json` committed (first manifest = delta baseline). Mac manifest pending Session 2. |
+| macOS `.app` + `.dmg` | ⏳ PENDING (0.3.0) | last built 0.1.0; needs Mac rebuild for 0.3.0 (updater baseline); see macOS HANDOFF block |
 | GitHub Actions CI | ⏳ written, not run | `.github/workflows/release.yml` matrix (windows-latest, macos-14, macos-13); fires on tag |
 
 ## Gotchas
@@ -106,28 +108,32 @@ Win-then-mac two-session order. Meta/tooling-only sessions skip the release stag
 - ALS Explorer `_LANG` is module-global; single-panel-instance contract.
 - `tests/test_settings_dialog.py` teardown: pass `tempfile.gettempdir()` (str path) to `setPath` — PySide6 6.11.1 signature change.
 - tomlkit is a runtime dep (config_writer); config.py stays on stdlib tomllib for reads.
+- **Version is dual-SSOT-mirrored**: `pyproject.toml` (authoritative per UPDATE_RULES §2) AND `cratedig/__init__.__version__` (runtime, read by updater + spec `info_plist`). Bump BOTH together every release — they had drifted (init was 0.1.0 while pyproject was 0.2.0).
+- **pytest lives in `[dev]` extra, NOT installed by `build_all.*`** — the build venv has only gui/analysis/download/metadata/build. Run `pip install -e ".[dev]"` (or `pip install pytest`) before pytest in that venv.
+- **Updater manifest hash**: builder (`make_manifest.build_update_zip_doc`) and applier (`updater.load_update_manifest`) MUST use the same `updater.manifest_sha256` (canonical JSON, sorted keys, `,`/`:` separators) — never hand-roll a second hash.
+- **`DEFAULT_APP_PATHS` in make_manifest.py is conservative/untested vs a real code-only diff** — first delta release must validate it (see Backlog).
 
 ## Verification
-- Full pytest: **755 passed, 0 failed, 0 errors** (v0.2.0 codebase).
-- v0.2.0 frozen exe smoke-launched on Windows — window alive, no crash; `%APPDATA%\cratedig` seeded correctly.
-- `cratedig health` and `cratedig dedup` smoke-run OK on real 653-sample DB.
-- macOS `.app` (0.1.0) smoke-tested on Apple Silicon: seeded config + DB (all 13 tables), process alive no crash.
+- Full pytest: **819 passed, 0 failed** (v0.3.0; +64 new: test_updater.py 57, test_make_manifest.py 7).
+- v0.3.0 frozen `cratedig.exe` smoke-launched on Windows — alive 6s, no crash; `cratedig-setup-0.3.0.exe` (160.7 MB) compiled OK; manifest committed.
+- macOS `.app` NOT yet rebuilt for 0.3.0 (Session 2 pending).
 
 ## macOS HANDOFF — PENDING
-- version: 0.2.0
-- tier: full   # per-user install-layout change (UPDATE_RULES §7.5.1) — not a delta
-- windows update: DONE (cratedig-setup-0.2.0.exe)
+- version: 0.3.0
+- tier: full   # baseline: offline-updater first ships as FULL on both OS; no prior mac manifest to diff
+- windows update: DONE (cratedig-setup-0.3.0.exe; manifest cratedig-0.3.0-win.json committed)
 - macos update: PENDING
-- source ref: next commit on main (parent 1751e5f) — user commits this session's diff; macOS session does `git pull` first
-- changed files: cratedig/{db/database.py, scan/scanner.py, audio/features.py, audio/analyzer.py, index.py, gui/main_window.py, gui/theme.py, gui/worker.py, gui/settings_tabs/_keys.py, gui/settings_tabs/preferences_tab.py}, packaging/windows/cratedig.iss, pyproject.toml
-- new deps/assets: none (code-only; build_all.sh fetches the usual ffmpeg/ffplay)
-- build command: bash packaging/macos/build_all.sh 0.2.0
-- notes: macOS .app must adopt per-user (~/Applications) per UPDATE_RULES §7.5.1 one-time migration. No release manifest committed — manifest/delta tooling still unimplemented; full tier, no prior manifest to diff.
+- source ref: next commit on main (parent b167f45) — user commits this session's diff; macOS session does `git pull` first
+- changed files: cratedig/{updater.py NEW, __init__.py, gui/main_window.py}, packaging/{make_manifest.py NEW, cratedig.spec, windows/cratedig-update.iss NEW, windows/build_all.ps1, macos/build_all.sh}, pyproject.toml, tests/{test_updater.py NEW, test_make_manifest.py NEW}, .gitignore
+- new deps/assets: none (code-only; build_all.sh fetches the usual ffmpeg/ffplay). NOTE: build venv may lack pytest — `pip install -e ".[dev]"` if running tests there.
+- build command: bash packaging/macos/build_all.sh 0.3.0   (no prior mac manifest → full → .dmg; commits cratedig-0.3.0-mac.json)
+- notes: **SUPERSEDED — do NOT build mac 0.3.0.** Next session is the GitHub online-update migration (→0.4.0, trigger «начинаем переезд», see Backlog), which rebuilds both OS full as the online baseline. This 0.3.0 handoff is kept only as the record of the last offline release.
 
 ## Backlog
-- **NEXT SESSION (agreed with user): implement the offline updater end-to-end — (1) packaging/windows/cratedig-update.iss, (2) cratedig/updater.py + restart helper + Help→"Apply update from file…", (3) delta/manifest build step in build_all.ps1 + build_all.sh, (4) first committed release manifest — then ship FULL builds on BOTH OS as the updater baseline. This baseline must be installed via full .exe/.dmg before any delta works (macOS updater is app code; 0.2.0 has none).**
-- **Offline updater** (PLANNED): see above; covers `cratedig-update.iss`, `updater.py`, restart helper, manifest/delta build step in `build_all.*`.
-- **No `packaging/release-manifests/cratedig-0.2.0-win.json` committed** — manifest/delta tooling still unimplemented; this was a full-tier release with no prior manifest to diff against.
+- **NEXT SESSION = GitHub online-update MIGRATION → 0.4.0 (trigger: user says «начинаем переезд»).** AGREED: full move from OFFLINE to GitHub Releases feed; **minisign** signing (bundle minisign binary per-OS in `packaging/bin/<os>/` like ffmpeg; sign manifest at build, verify in-app via `minisign -V` + embedded pubkey); **auto-check on startup**. Repo feed = `zloishaman1337/cratedig` (PUBLIC; NOTE local `origin` is stale `Sononym_fork.git` → hardcode the slug, don't auto-detect, or repoint remote first). Tasks: (1) `GITHUB_REPO = "zloishaman1337/cratedig"` const; (2) install+bundle minisign; (3) gen keypair, `.key`→gitignore, `.pub` embedded+committed; (4) `updater.py`: `check_latest`/`download_asset`/minisign-verify/auto-apply + **Windows in-app download+launch** (win had none); (5) `main_window` startup auto-check thread + update dialog; (6) `build_all.*`: sign-manifest + `gh release create` publish; (7) rewrite `UPDATE_RULES.md` offline→online; (8) bump 0.4.0; tester→impl→reviewer; (9) Win full build + sign + smoke + gh publish. Reuses `is_newer`/`check_compatible`/`load_update_manifest`/`verify_payload`/`apply_update`/restart-helper. **Supersedes the pending 0.3.0 mac build** (skip it; 0.4.0 rebuilds both OS full as the online baseline).
+- **USER PREREQS for the migration**: (a) `gh auth login` on Win (and mac in Session B); (b) back up `cratedig.key` + password after gen, copy key to mac for Session B signing; (c) repo `zloishaman1337/cratedig` already PUBLIC ✓ (consider `git remote set-url origin https://github.com/zloishaman1337/cratedig.git` so push/gh target it). **Baseline trap**: 0.4.0 is the FIRST online-capable build — 0.2/0.3 installs can't auto-pull it (no checker), so 0.4.0 is distributed manually one last time (full installers on the GitHub release); auto-update works from 0.5.0 onward.
+- (Superseded) mac 0.3.0 offline `.dmg` — not built; replaced by 0.4.0 migration above. 0.3.0-win build/manifest stay committed as the last offline artifacts.
+- **Exercise the DELTA path on the NEXT code-only release** (after 0.3.0 baseline installed on both OS): build_all diffs vs 0.3.0 manifest → should emit `cratedig-update-<ver>.exe` (Win) / `-mac.zip` (mac). **Verify the `DEFAULT_APP_PATHS` allowlist in `make_manifest.py` matches the REAL code-only diff** — if the frozen exe or other expected-app files have unexpected siblings, tune the allowlist (currently conservative/untested against a real diff).
 - Exercise CI workflow (`.github/workflows/release.yml`) end-to-end on a pushed `v*` tag.
 - Optional: code-signing (Windows EV cert) and macOS notarization (Apple Dev ID $99/yr).
 - Consider hnswlib ANN for large libraries (brute force fine at personal scale).
@@ -139,8 +145,9 @@ Win-then-mac two-session order. Meta/tooling-only sessions skip the release stag
 - `PACKAGING.md` — distribution/packaging plan: onedir + Inno Setup (Windows) + `.app`/`.dmg` (macOS); §6 = macOS rebuild-after-source-change procedure; "Release process" pointer → UPDATE_RULES.md
 - `UPDATE_RULES.md` — authoritative release/update pipeline: two-tier OFFLINE model (delta vs full), per-OS delta delivery (Win = Inno update `.exe`; Mac = zip + in-app apply), trigger scope, version SSOT, two-session Win-then-mac order, macOS HANDOFF block format (includes `tier` field)
 - `packaging/release-manifests/` — per-release file-hash manifests committed to repo; diff baseline for automatic tier decision (§7 UPDATE_RULES.md)
-- `cratedig/updater.py` *(PLANNED — not yet implemented)* — macOS-only apply-from-file updater (Help → "Apply update from file…") + restart helper; see UPDATE_RULES.md §7.3b/7.4
-- `packaging/windows/cratedig-update.iss` *(PLANNED — not yet implemented)* — Windows delta installer (small Inno script, same `AppId`, only changed files); see UPDATE_RULES.md §7.3a
+- `cratedig/updater.py` — macOS apply-from-file updater (Help → "Apply update from file…") + bash restart helper; pure logic shared with `make_manifest.py`; see UPDATE_RULES.md §7.3b/7.4
+- `packaging/make_manifest.py` — build-time manifest gen / diff / tier decision / delta-zip (mac) / win-include (`update-files.iss`); imports `cratedig.updater` for shared schema+hash
+- `packaging/windows/cratedig-update.iss` — Windows delta installer (small Inno, same `AppId`, `#include update-files.iss`); see UPDATE_RULES.md §7.3a
 - `packaging/windows/build_all.ps1` — Windows one-shot build (venv→deps→icons→PyInstaller→Inno); usage: `pwsh packaging/windows/build_all.ps1 <version>`
 - `.claude/commands/update.md` — `/update` session-start command; branches Win-change-mode vs macOS-build-mode based on HANDOFF block + platform
 - `README.md` — end-user install guide (installer, first run, data locations, feature tour, troubleshooting)

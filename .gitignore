@@ -6,7 +6,7 @@ venv/
 *.egg-info/
 build/
 dist/
-
+*.key
 # runtime data
 config.toml
 *.db
@@ -24,9 +24,10 @@ example/yamdl/token.txt
 packaging/bin/
 packaging/icons/
 packaging/windows/Output/
+packaging/windows/update-files.iss
 packaging/*.iconset/
 ARCHITECTURE.md
-COMPACT.md
+# COMPACT.md
 PACKAGING.md
 README.dev.md
 .claude/

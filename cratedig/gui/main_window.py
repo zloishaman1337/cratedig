@@ -331,6 +331,7 @@ class MainWindow(QMainWindow):
         central_layout.addWidget(self._pages, stretch=1)
         self.setCentralWidget(central)
         self._toasts = ToastManager(central)
+        self._build_menu_bar()
 
         # Restore window geometry and splitter state if prefs say so
         if self._settings.value(_keys.REMEMBER_WINDOW_GEOMETRY, _keys.DEFAULTS[_keys.REMEMBER_WINDOW_GEOMETRY], type=bool):
@@ -585,6 +586,44 @@ class MainWindow(QMainWindow):
             self._sample_table.set_tags_visible(bool(value))
         elif key == _keys.EXPAND_TREE_ON_LOAD:
             self._expand_tree_on_load = bool(value)
+
+    def _build_menu_bar(self) -> None:
+        """Help menu. The offline updater entry is macOS-only — Windows ships its
+        delta as an external `cratedig-update-*.exe` (UPDATE_RULES.md §7.3a)."""
+        import sys
+
+        if sys.platform != "darwin":
+            return
+        from PySide6.QtGui import QAction
+
+        help_menu = self.menuBar().addMenu("Help")
+        act = QAction("Apply update from file…", self)
+        act.triggered.connect(self._on_apply_update)
+        help_menu.addAction(act)
+
+    def _on_apply_update(self) -> None:
+        """Pick a local update zip and apply it offline, then relaunch (macOS)."""
+        from PySide6.QtWidgets import QApplication, QFileDialog, QMessageBox
+
+        import cratedig
+        from cratedig import updater
+
+        path, _ = QFileDialog.getOpenFileName(
+            self, "Apply update from file", "", "cratedig update (*.zip)"
+        )
+        if not path:
+            return
+        try:
+            updater.apply_update(path, cratedig.__version__)
+        except updater.UpdateError as exc:
+            QMessageBox.warning(self, "Update not applied", str(exc))
+            return
+        QMessageBox.information(
+            self,
+            "Updating",
+            "Update verified. cratedig will close, apply the update, and relaunch.",
+        )
+        QApplication.quit()
 
     def _on_config_written(self) -> None:
         from PySide6.QtWidgets import QMessageBox

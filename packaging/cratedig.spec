@@ -2,6 +2,7 @@
 # Build:  pyinstaller packaging/cratedig.spec --noconfirm
 # Output: dist/cratedig/  (Windows/Linux)  |  dist/cratedig.app  (macOS)
 
+import re
 import sys
 from pathlib import Path
 
@@ -11,6 +12,11 @@ SPECDIR = Path(SPECPATH)            # injected by PyInstaller
 ROOT = SPECDIR.parent
 IS_WIN = sys.platform == "win32"
 IS_MAC = sys.platform == "darwin"
+
+# Read the runtime version from the package SSOT mirror (kept in sync with
+# pyproject.toml at bump time) so the macOS bundle reports the right version.
+_init = (ROOT / "cratedig" / "__init__.py").read_text(encoding="utf-8")
+VERSION = re.search(r'__version__\s*=\s*"([^"]+)"', _init).group(1)
 
 icon_file = str(SPECDIR / ("cratedig.ico" if IS_WIN else "cratedig.icns"))
 
@@ -77,8 +83,8 @@ if IS_MAC:
         icon=icon_file,
         bundle_identifier="com.cratedig.app",
         info_plist={
-            "CFBundleShortVersionString": "0.1.0",
-            "CFBundleVersion": "0.1.0",
+            "CFBundleShortVersionString": VERSION,
+            "CFBundleVersion": VERSION,
             "NSHighResolutionCapable": True,
         },
     )
