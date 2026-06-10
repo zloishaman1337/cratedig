@@ -15,7 +15,9 @@ macOS delta = `.zip` applied in-app via **Help → "Apply update from file…"**
 (`cratedig/updater.py`) + bash restart helper that swaps files after app exits.
 **App checks for updates automatically on startup** (frozen builds, GitHub Releases feed,
 silent on failure/up-to-date, dialog only when newer). Every asset verified by minisign.
-Win-then-mac two-session order. Meta/tooling-only sessions skip the release stage entirely.
+**Both Windows and macOS share the same in-app update flow** (launch → accept → auto
+download+verify+apply+relaunch). Win-then-mac two-session order. Meta/tooling-only
+sessions skip the release stage entirely.
 
 ## Module status
 | module | state | note |
@@ -37,9 +39,9 @@ Win-then-mac two-session order. Meta/tooling-only sessions skip the release stag
 | search.query | ✅ | parameterized SQL filters incl. category |
 | tui | ✅ | collapsible Tree; breadcrumb+DataTable per folder; `b` fav; `u` duplicates |
 | gui | ✅ | Global dark redesign; all subsystems wired |
-| gui.main_window | ✅ | `_preview_timer` 30ms; `_on_config_written()` prompts restart; `_maybe_check_updates()` silent startup check (frozen only); Win: download+verify → `os.startfile`+quit; mac: opens browser |
+| gui.main_window | ✅ | `_preview_timer` 30ms; `_on_config_written()` prompts restart; `_maybe_check_updates()` silent startup check (frozen only); unified download+install on both OS: Win → `os.startfile`+quit; mac → `updater.apply_dmg_update(path)`+quit |
 | gui.update_check | ✅ | `UpdateCheckThread` (silent startup check) + `UpdateDownloadThread` (streams + minisign-verifies) |
-| updater | ✅ | **ONLINE updater**. Pure layer: `FileEntry`/`UpdateManifest`/`ReleaseAsset`/`Release`, `sha256_file`, `manifest_sha256`, `build_update_zip_doc`, `load_update_manifest`, `is_newer`, `verify_payload`, `current_os`, `parse_release`, `select_asset`, `find_signature`. I/O: `fetch_latest_release`, `download_asset`, `minisign_path`, `verify_signature`, `download_and_verify`. macOS apply: `apply_update` → extract+verify → spawn bash restart helper. `GITHUB_REPO="zloishaman1337/cratedig"` hardcoded. `MINISIGN_PUBKEY` embedded (key id 54F217219B866BE6). |
+| updater | ✅ | **ONLINE updater**. Pure layer: `FileEntry`/`UpdateManifest`/`ReleaseAsset`/`Release`, `sha256_file`, `manifest_sha256`, `build_update_zip_doc`, `load_update_manifest`, `is_newer`, `verify_payload`, `current_os`, `parse_release`, `select_asset`, `find_signature`. I/O: `fetch_latest_release`, `download_asset`, `minisign_path`, `verify_signature`, `download_and_verify`. macOS apply: `apply_update` (delta `.zip`), `apply_dmg_update` + `_write_dmg_restart_helper` (full `.dmg` mount→swap→relaunch). `GITHUB_REPO="zloishaman1337/cratedig"` hardcoded. `MINISIGN_PUBKEY` embedded (key id 54F217219B866BE6). |
 | als (parser) | ✅ | stdlib-only; `parse_als(path)→dict`; AU/VST2/VST3/M4L |
 | sources.* | ✅ | youtube/yandex/freesound/manager; `safe_filename`+`unique_path`; `ffmpeg_location` yt-dlp opt from `bundled_binary` when frozen |
 | metadata (mb/discogs) | ✅ | incremental `metadata_cache`; `rank_track_hits(..., force_live=False)` |
@@ -55,7 +57,8 @@ Win-then-mac two-session order. Meta/tooling-only sessions skip the release stag
 |---|---|---|
 | Windows onedir build | ✅ DONE 0.4.0 | `dist/cratedig/`; ~160.9 MB; minisign.exe bundled at `dist/cratedig/_internal/minisign.exe` |
 | Windows Inno installer | ✅ DONE 0.4.0 | `cratedig-setup-0.4.0.exe` ~160.9 MB signed; tier=FULL (minisign.exe is non-app-code binary → auto-full); per-user install; delta path = `cratedig-update.iss` |
-| Release manifests | ✅ | `cratedig-0.4.0-win.json` generated; pending user commit. (`cratedig-0.3.0-win.json` = prior offline baseline) |
+| Release manifests | ✅ committed (4595560, pushed) | `cratedig-0.4.0-win.json` committed on main; pushed to origin. (`cratedig-0.3.0-win.json` = prior offline baseline) |
+| Windows GitHub release | ✅ published to GitHub release 0.4.0 (signed) | `cratedig-setup-0.4.0.exe` + `.minisig` attached; https://github.com/zloishaman1337/cratedig/releases/tag/0.4.0 |
 | macOS `.app` + `.dmg` | ⏳ PENDING (0.4.0) | last built 0.1.0; 0.4.0 full .dmg = first online-capable mac build |
 | GitHub Actions CI | ⏳ written, not run | `.github/workflows/release.yml` matrix; fires on tag |
 
@@ -81,30 +84,30 @@ Win-then-mac two-session order. Meta/tooling-only sessions skip the release stag
 - **Baseline trap (0.4.0)**: 0.2/0.3 installs have no update checker — cannot auto-pull 0.4.0. Distribute 0.4.0 full installers manually. Auto-update works from 0.5.0 onward.
 - **minisign.key in repo root, gitignored**. Back it up and copy to mac before Session 2. Password via `$env:MINISIGN_PASSWORD`. Never commit the key.
 - **GITHUB_REPO hardcoded** as `"zloishaman1337/cratedig"` — do not auto-detect from git remote.
-- **macOS update dialog (0.4.0)**: opens `https://github.com/zloishaman1337/cratedig/releases/latest` in browser. Full in-app mac download = future session.
 - **`DEFAULT_APP_PATHS` in make_manifest.py is conservative/untested vs a real code-only diff** — first delta release must validate it.
+- **`apply_dmg_update` is macOS-only** — raises immediately on non-Darwin; off-platform guard tested in `tests/test_updater_online.py`.
 
 ## Verification
-- Full pytest: **844 passed, 0 failed** (0.4.0; 819 prior + 25 new in `tests/test_updater_online.py`).
+- Full pytest: **846 passed, 0 failed** (apply_dmg_update off-darwin guard + restart-helper script-shape tests added in `tests/test_updater_online.py`).
 - v0.4.0 frozen `cratedig.exe` smoke-launched on Windows — alive 8s, no crash; startup auto-check ran silently (live feed latest = 0.2.0 < 0.4.0 → no update dialog).
 - `updater.verify_signature` against embedded `MINISIGN_PUBKEY` VERIFIED end-to-end for `cratedig-setup-0.4.0.exe`.
+- Live-feed verified post-publish: `updater.fetch_latest_release()` returns 0.4.0, selects win asset + .minisig; source archives absent from assets[].
 - macOS `.app` NOT yet rebuilt (0.4.0 Session 2 pending).
 
 ## macOS HANDOFF — PENDING
 - version: 0.4.0
 - tier: full   # first online-capable build; no prior mac manifest to diff against; must be full
-- windows update: DONE (`cratedig-setup-0.4.0.exe` signed, ~160.9 MB; NOT yet published to GitHub — held for user approval)
+- windows update: DONE — `cratedig-setup-0.4.0.exe` signed, published to GitHub release 0.4.0 (signed); commit 4595560, pushed to origin
 - macos update: PENDING
 - build command: `SIGN=1 PUBLISH=1 MINISIGN_PASSWORD=<pw> bash packaging/macos/build_all.sh 0.4.0`
-- prerequisites: `brew install minisign`, `minisign.key` copied to mac repo root, `gh auth login`, `$MINISIGN_PASSWORD` set
+- prerequisites: `brew install minisign` (done), `minisign.key` copied to mac repo root (done), `gh auth login`, `$MINISIGN_PASSWORD` set
 - notes: Win-then-mac order; both OS builds must go to the same GitHub release tag. Win build is ready; mac Session 2 uploads .dmg + .minisig to same release. Baseline trap: 0.2/0.3 can't auto-pull — distribute 0.4.0 full installers manually.
 
 ## Backlog
-- **0.4.0 Session 1 remaining** (Windows build DONE; not yet published): (a) user approval + publish via `pwsh packaging/windows/build_all.ps1 0.4.0 -Publish`, (b) user commit (includes `cratedig-0.4.0-win.json` manifest), (c) distribute 0.4.0 full installer manually to existing 0.2/0.3 users (they cannot auto-update).
+- **0.4.0 Session 1 remaining**: distribute 0.4.0 full installer manually to existing 0.2/0.3 users (they cannot auto-update). Commit + push + publish are DONE (commit 4595560).
 - **0.4.0 Session 2 (macOS)**: see HANDOFF block above.
 - **Exercise the DELTA path on the NEXT code-only release** (after 0.4.0 baseline installed): build_all diffs vs 0.4.0 manifest → should emit `cratedig-update-<ver>.exe` (Win) / `-mac.zip` (mac). Validate `DEFAULT_APP_PATHS` allowlist in `make_manifest.py` against real diff.
-- **Future (0.5.0+)**: delta-over-the-wire path active for users on 0.4.0+ baseline; validate the full delta apply+relaunch flow.
-- **macOS in-app auto-download** (future): mac update dialog currently opens browser; implement `UpdateDownloadThread` path for mac.
+- **Future (0.5.0+)**: delta-over-the-wire path active for users on 0.4.0+ baseline; validate full delta apply+relaunch flow.
 - Exercise CI workflow (`.github/workflows/release.yml`) end-to-end on a pushed `v*` tag.
 - Optional: Windows EV code-signing cert and macOS notarization (Apple Dev ID $99/yr).
 - Consider hnswlib ANN for large libraries (brute force fine at personal scale).

@@ -643,10 +643,7 @@ class MainWindow(QMainWindow):
         self._update_check.start()
 
     def _on_update_available(self, release) -> None:
-        import sys
-
         import cratedig
-        from cratedig import updater
         from PySide6.QtWidgets import QMessageBox
 
         box = QMessageBox(self)
@@ -654,24 +651,14 @@ class MainWindow(QMainWindow):
         box.setText(
             f"cratedig {release.version} is available (you have {cratedig.__version__})."
         )
+        box.setInformativeText(
+            "Download and install it now? The app will close, update, and relaunch."
+        )
         box.setStandardButtons(
             QMessageBox.StandardButton.Yes | QMessageBox.StandardButton.No
         )
-        if sys.platform == "win32":
-            box.setInformativeText(
-                "Download and install it now? The app will close, update, and relaunch."
-            )
-            if box.exec() == QMessageBox.StandardButton.Yes:
-                self._start_update_download(release)
-        else:
-            from PySide6.QtCore import QUrl
-            from PySide6.QtGui import QDesktopServices
-
-            box.setInformativeText("Open the download page?")
-            if box.exec() == QMessageBox.StandardButton.Yes:
-                QDesktopServices.openUrl(
-                    QUrl(f"https://github.com/{updater.GITHUB_REPO}/releases/latest")
-                )
+        if box.exec() == QMessageBox.StandardButton.Yes:
+            self._start_update_download(release)
 
     def _start_update_download(self, release) -> None:
         from .update_check import UpdateDownloadThread
@@ -686,15 +673,27 @@ class MainWindow(QMainWindow):
 
     def _on_update_downloaded(self, installer_path: str) -> None:
         import os
+        import sys
 
         from PySide6.QtWidgets import QApplication, QMessageBox
 
+        from cratedig import updater
+
+        try:
+            if sys.platform == "win32":
+                # Inno installer closes the app, swaps files, and relaunches.
+                os.startfile(installer_path)
+            else:
+                # macOS: mount the verified .dmg and swap the .app via restart helper.
+                updater.apply_dmg_update(installer_path)
+        except updater.UpdateError as exc:
+            self._toasts.show(f"Update failed: {exc}", "error")
+            return
         QMessageBox.information(
             self,
             "Updating",
-            "Update verified. cratedig will close and the installer will relaunch it.",
+            "Update verified. cratedig will close, apply the update, and relaunch.",
         )
-        os.startfile(installer_path)  # Inno installer closes app, updates, relaunches
         QApplication.quit()
 
     def _on_config_written(self) -> None:

@@ -19,18 +19,24 @@ macOS**. Updates are **TWO-TIER** (see §7 for full design):
 | **Delta** | Windows | `packaging/windows/Output/cratedig-update-<ver>.exe` (small Inno installer) | code-only release (runtime identical) |
 | **Delta** | macOS | `dist/cratedig-update-<ver>-mac.zip` (in-app apply) | code-only release (runtime identical) |
 
-**Delta delivery differs per OS (by design — path of least resistance):**
-- **Windows delta = a small Inno "update" installer** the user or the app
-  launches. Same `AppId` as the full installer → it finds the install dir,
-  overwrites only the changed files, and (being an external process) closes the
-  app, swaps locked `.exe`/`.dll`, and relaunches. Reuses the existing Inno
-  toolchain; Windows in-app download+launch is handled by `UpdateDownloadThread`
-  → `os.startfile(installer_path)` + `QApplication.quit()`.
-- **macOS delta = a `.zip` applied in-app** via **Help → "Apply update from
-  file…"** (`cratedig/updater.py`). In-app macOS auto-download for the delta
-  path is a future refinement; the current in-app GUI opens the GitHub releases
-  page in the browser when a newer version is detected. The manual
-  Help → "Apply update from file…" entry remains as the local-file fallback.
+**Both Windows and macOS share the same in-app update flow:** launch → update
+dialog → accept → auto download + verify + apply + relaunch. There is no manual
+browser step for either OS.
+
+- **Windows full/delta:** `UpdateDownloadThread` downloads + minisign-verifies
+  the `.exe`, then `os.startfile(installer_path)` launches it and
+  `QApplication.quit()` exits. The Inno installer (external process) closes the
+  app, swaps locked files, and relaunches.
+- **macOS full:** `UpdateDownloadThread` downloads + minisign-verifies the
+  `.dmg`, then `updater.apply_dmg_update(path)` mounts the image
+  (`hdiutil attach -nobrowse`), finds `cratedig.app` inside, and spawns a
+  dependency-free bash restart helper that: waits for the running app to exit
+  (`kill -0`), `ditto`s the new `.app` to `<app>.new`, swaps via two same-volume
+  `mv` (effectively atomic), clears quarantine (`xattr -dr`), detaches the image
+  (`hdiutil detach`), and relaunches via `open`. Then `QApplication.quit()`.
+- **macOS delta:** applied in-app via **Help → "Apply update from file…"**
+  (`apply_update` in `cratedig/updater.py`). This offline manual path remains as
+  a fallback for local `.zip` files.
 
 **ONLINE — GitHub Releases feed.** Since 0.4.0, the app checks for updates
 automatically on startup (frozen builds only) by fetching
@@ -248,15 +254,16 @@ When no release is mid-flight, this section reads `## macOS HANDOFF — none`.
   (`fetch_latest_release`, `parse_release`, `tag_to_version`, `current_os`,
   `select_asset`, `find_signature`); I/O layer (`download_asset`,
   `minisign_path`, `verify_signature`, `download_and_verify`); macOS apply layer
-  (`apply_update`, restart helper; see §7.3b/7.4).
+  (`apply_update` for delta `.zip`; `apply_dmg_update` + `_write_dmg_restart_helper`
+  for full `.dmg` auto-apply; see §7.3b/7.4).
 - `cratedig/gui/update_check.py` — `UpdateCheckThread` (silent startup check;
   emits `found` only when a newer version exists) + `UpdateDownloadThread`
   (download + verify; emits `done` with verified installer path).
 - `cratedig/gui/main_window.py` — `_maybe_check_updates()` kicks the check on
-  startup (frozen only); `_on_update_available()` shows the update dialog;
-  Windows path: `_start_update_download()` → `os.startfile(installer)` + quit;
-  macOS path: opens `https://github.com/zloishaman1337/cratedig/releases/latest`
-  in the browser (full in-app mac auto-apply is a future session).
+  startup (frozen only); `_on_update_available()` shows the update dialog and
+  offers download+install on BOTH Windows and macOS; `_on_update_downloaded()`
+  branches: Windows → `os.startfile(installer)` + quit; macOS →
+  `updater.apply_dmg_update(path)` + quit.
 - `packaging/make_manifest.py` — build-time manifest gen / diff / tier decision /
   delta-zip (mac) / win-include (`update-files.iss`); imports `cratedig.updater`
   for shared schema + hash.
@@ -320,21 +327,35 @@ Applied by `cratedig/updater.py` via **Help → "Apply update from file…"** (7
 Each `.zip` uploaded to GitHub has a companion `.zip.minisig` in the same release.
 
 ### 7.4 macOS in-app updater (`cratedig/updater.py`)
-**Help → "Apply update from file…"** → user picks a local `cratedig-update-*-mac.zip`.
+
+**Full `.dmg` auto-apply (online update flow):**
+`_on_update_downloaded` calls `updater.apply_dmg_update(dmg_path)`. The function
+(macOS-only; raises on non-Darwin):
+1. Mounts the already-minisign-verified `.dmg` via `hdiutil attach -nobrowse
+   -mountpoint <tmp>`.
+2. Locates `cratedig.app` inside the mounted volume.
+3. Writes a dependency-free bash restart helper (`_write_dmg_restart_helper`)
+   that: polls `kill -0 $PARENT_PID` until the app exits, `ditto`s the new
+   `.app` to `<current_app>.new`, atomically swaps via two same-volume `mv`,
+   clears quarantine (`xattr -dr com.apple.quarantine`), detaches the image
+   (`hdiutil detach`), and relaunches via `open`.
+4. Spawns the helper detached and returns. The caller then calls
+   `QApplication.quit()`.
+
+Signature verification is the caller's responsibility and is always done by
+`download_and_verify` before `apply_dmg_update` is called.
+
+**Delta `.zip` manual fallback — Help → "Apply update from file…":**
+User picks a local `cratedig-update-*-mac.zip`.
 1. Read `update-manifest.json`; verify `manifest_sha256`; require
    `to_version` > current and current ∈ `from_versions` (else: "needs full `.dmg`").
 2. Verify every payload file's sha256 matches the manifest.
-3. Stage to a temp dir, then hand off to a **bash restart helper** that: waits
-   for the app to quit (polls `kill -0 $PARENT_PID`), copies files via `ditto`
-   into the `.app`, removes `deletions`, clears quarantine (`xattr -dr`), and
-   relaunches with `open`.
+3. Stage to a temp dir, then hand off to the same **bash restart helper** pattern:
+   waits for app to quit, copies files via `ditto`, removes `deletions`, clears
+   quarantine, relaunches with `open`.
 On return the caller quits via `QApplication.quit()`. Full installers
-(`.exe`/`.dmg`) are applied the normal way (run installer / drag `.app`) for
-first install and dep-change releases.
-
-**Future (next session):** in-app auto-download for the macOS path — currently
-the macOS update dialog opens the GitHub releases page in the browser; the user
-downloads and applies manually via Help → "Apply update from file…".
+(`.exe`/`.dmg`) for first install and dep-change releases follow the normal flow
+above.
 
 ### 7.5 Per-user install (required for delta apply without elevation)
 The app installs to `%LOCALAPPDATA%\Programs\cratedig`

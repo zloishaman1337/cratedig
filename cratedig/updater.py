@@ -448,6 +448,74 @@ rm -rf "$STAGED" "$0"
     helper_path.chmod(0o755)
 
 
+def _write_dmg_restart_helper(
+    helper_path: Path, app_root: Path, mount_point: Path, src_app: Path
+) -> None:
+    """Write a dependency-free bash helper that swaps the whole .app from a mounted
+    full ``.dmg`` after the running app quits, then relaunches.
+
+    Copies to ``<app>.new`` first so a failed copy never destroys the install; the
+    final swap is two same-volume ``mv`` renames (effectively atomic).
+    """
+    script = f"""#!/bin/bash
+set -e
+PARENT_PID="$1"
+APP="{app_root}"
+SRC="{src_app}"
+MOUNT="{mount_point}"
+# wait for the app to fully exit so its bundle is no longer in use
+while kill -0 "$PARENT_PID" 2>/dev/null; do sleep 0.2; done
+rm -rf "$APP.new" "$APP.old"
+ditto "$SRC" "$APP.new"
+mv "$APP" "$APP.old"
+mv "$APP.new" "$APP"
+xattr -dr com.apple.quarantine "$APP" 2>/dev/null || true
+hdiutil detach "$MOUNT" 2>/dev/null || true
+rm -rf "$APP.old"
+open "$APP"
+rm -f "$0"
+"""
+    helper_path.write_text(script, encoding="utf-8")
+    helper_path.chmod(0o755)
+
+
+def apply_dmg_update(
+    dmg_path: str | os.PathLike[str], app_root: Path | None = None
+) -> None:
+    """Mount an already-verified full ``.dmg`` and swap the ``.app`` via a restart
+    helper (macOS online auto-update). Caller MUST quit the app on return.
+
+    Signature verification is the caller's responsibility (see
+    :func:`download_and_verify`); this only mounts and stages the swap.
+    """
+    if sys.platform != "darwin":
+        raise UpdateError("dmg apply is only supported on macOS")
+    root = app_root or app_bundle_root()
+    mount = Path(tempfile.mkdtemp(prefix="cratedig-dmg-"))
+    proc = subprocess.run(
+        ["hdiutil", "attach", str(dmg_path), "-nobrowse", "-mountpoint", str(mount)],
+        capture_output=True,
+        text=True,
+    )
+    if proc.returncode != 0:
+        raise UpdateError(f"could not mount update dmg: {proc.stderr.strip()}")
+
+    src_app = mount / root.name
+    if not src_app.is_dir():
+        apps = sorted(mount.glob("*.app"))
+        if not apps:
+            subprocess.run(["hdiutil", "detach", str(mount)], capture_output=True)
+            raise UpdateError("no .app found inside the update dmg")
+        src_app = apps[0]
+
+    helper = Path(tempfile.gettempdir()) / "cratedig-apply-dmg.sh"
+    _write_dmg_restart_helper(helper, root, mount, src_app)
+    subprocess.Popen(
+        ["/bin/bash", str(helper), str(os.getpid())],
+        start_new_session=True,
+    )
+
+
 def apply_update(
     zip_path: str | os.PathLike[str],
     current_version: str,

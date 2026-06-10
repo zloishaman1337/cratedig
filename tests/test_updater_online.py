@@ -273,3 +273,32 @@ def test_download_and_verify_happy_path(monkeypatch, tmp_path):
 
     out = updater.download_and_verify(rel, tmp_path, os_name="win", tier="full")
     assert out.name == "cratedig-setup-0.4.0.exe"
+
+
+# --------------------------------------------------------------------------- #
+# macOS full-dmg in-app apply                                                 #
+# --------------------------------------------------------------------------- #
+
+def test_apply_dmg_update_non_darwin_raises(monkeypatch, tmp_path):
+    monkeypatch.setattr(updater.sys, "platform", "win32")
+    with pytest.raises(updater.UpdateError):
+        updater.apply_dmg_update(tmp_path / "x.dmg")
+
+
+def test_dmg_restart_helper_script_shape(tmp_path):
+    from pathlib import Path
+
+    helper = tmp_path / "h.sh"
+    updater._write_dmg_restart_helper(
+        helper,
+        Path("/Users/x/Applications/cratedig.app"),
+        Path("/tmp/mnt"),
+        Path("/tmp/mnt/cratedig.app"),
+    )
+    text = helper.read_text()
+    # waits for the parent to exit, copies safely, swaps, detaches, relaunches
+    assert 'kill -0 "$PARENT_PID"' in text
+    assert 'ditto "$SRC" "$APP.new"' in text
+    assert 'mv "$APP.new" "$APP"' in text
+    assert "hdiutil detach" in text
+    assert "open \"$APP\"" in text
