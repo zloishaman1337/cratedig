@@ -20,13 +20,15 @@ source .venv/bin/activate
 python -m pip install -U pip
 pip install -e ".[gui,analysis,download,metadata,build]"
 
-echo "==> Fetch ffmpeg/ffplay (native arch from evermeet.cx)"
+echo "==> Fetch ffmpeg/ffplay (static arm64 from osxexperts.net, FFmpeg 8.1)"
 mkdir -p packaging/bin/macos
+# osxexperts.net ships STATIC arm64 builds (evermeet.cx is x86_64-only -> Rosetta).
+# URLs are version-pinned (ff*81arm = FFmpeg 8.1); bump the "81" when upgrading.
 for tool in ffmpeg ffplay; do
   if [[ ! -x "packaging/bin/macos/$tool" ]]; then
-    # evermeet.cx can reset the connection mid-transfer; retry to survive it.
+    # the host can reset the connection mid-transfer; retry to survive it.
     curl -L --retry 5 --retry-delay 3 --retry-all-errors --connect-timeout 30 \
-      "https://evermeet.cx/ffmpeg/getrelease/$tool/zip" -o "/tmp/$tool.zip"
+      "https://www.osxexperts.net/${tool}81arm.zip" -o "/tmp/$tool.zip"
     unzip -o "/tmp/$tool.zip" -d packaging/bin/macos
   fi
 done
