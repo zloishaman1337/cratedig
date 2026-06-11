@@ -62,9 +62,9 @@ sessions skip the release stage entirely.
 |---|---|---|
 | Windows onedir build | ✅ DONE 0.5.1 | `dist/cratedig/`; smoke-launched alive 8s clean stop |
 | Windows installer | ✅ DONE 0.5.1 | `cratedig-setup-0.5.1.exe` signed; tier=FULL; delta removed from release |
-| Release manifests | ✅ win 0.5.1 | `cratedig-0.5.1-win.json` committed; mac manifest PENDING |
+| Release manifests | ✅ win+mac 0.5.1 | `cratedig-0.5.1-win.json` + `cratedig-0.5.1-mac.json` committed (db1d7c3) |
 | Windows GitHub release | ✅ published 0.5.1 (signed) | `cratedig-setup-0.5.1.exe` + `.minisig` verified; https://github.com/zloishaman1337/cratedig/releases/tag/0.5.1 |
-| macOS `.app` + `.dmg` | ⏳ PENDING 0.5.1 | needs Mac — see macOS HANDOFF block below |
+| macOS `.app` + `.dmg` | ✅ DONE 0.5.1 | signed (minisign verified), published to 0.5.1 release, smoke ok |
 | GitHub Actions CI | ⏳ written, not run | `.github/workflows/release.yml` matrix; fires on tag |
 
 ## Gotchas
@@ -102,17 +102,9 @@ sessions skip the release stage entirely.
 - Frozen `dist\cratedig\cratedig.exe` (0.5.1) smoke-launched — alive 8s, clean stop.
 - `cratedig-setup-0.5.1.exe` minisign VERIFIED ("Signature and comment signature verified", trusted comment "cratedig 0.5.1").
 - Live feed: `fetch_latest_release()`→0.5.1; `is_newer(0.5.1,0.5.0)`=True; `select_asset(win,full)`→cratedig-setup-0.5.1.exe.
+- `cratedig-0.5.1.dmg` minisign VERIFIED ("Signature and comment signature verified", trusted comment "cratedig 0.5.1"); .app smoke-launched alive 8s, clean stop; tier=FULL.
 
-## macOS HANDOFF — PENDING
-- **version**: 0.5.1
-- **tier**: full (.dmg) — same client-always-full rule
-- **windows update**: DONE (`cratedig-setup-0.5.1.exe` signed + published)
-- **macos update**: PENDING — needs Mac
-- **source ref**: afce74e (origin/main)
-- **changed files**: `cratedig/updater.py`, `cratedig/gui/update_check.py`, `cratedig/gui/main_window.py`, `cratedig/gui/als_explorer.py`, `cratedig/projects_fmt/common.py`; DELETED `cratedig/gui/project_explorer.py`
-- **new deps/assets**: none (`build_all.sh` fetches the usual ffmpeg/ffplay/minisign)
-- **build command**: `bash packaging/macos/build_all.sh 0.5.1`
-- **notes**: in-app download now has progress + cancel + safe-abort on the mac path too (shared `UpdateDownloadThread`); `AlsExplorerPanel` is now generic — no `ProjectExplorerPanel` to port; `to_checker_data` + `resolve_samples_on_disk` in `projects_fmt/common.py` used by Bitwig/Nuendo panels
+## macOS HANDOFF — none
 
 ## Backlog
 - **0.4.0 distribute manually**: hand 0.4.0+ full installers to existing 0.2/0.3 users — they have no update checker.
