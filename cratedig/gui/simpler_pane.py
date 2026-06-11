@@ -13,13 +13,14 @@ from math import cos, log10, radians, sin
 from pathlib import Path
 
 import numpy as np
-from PySide6.QtCore import QEvent, QMimeData, QPointF, QRectF, Qt, QTimer, QUrl, Signal
+from PySide6.QtCore import QEvent, QMimeData, QPointF, QRectF, QSize, Qt, QTimer, QUrl, Signal
 from PySide6.QtGui import (
     QColor,
     QDrag,
     QKeySequence,
     QPainter,
     QPen,
+    QPixmap,
     QPolygonF,
     QShortcut,
 )
@@ -47,7 +48,14 @@ from ..audio.editor import (
     trim_silence,
     write_wav,
 )
-from .logic import clamp_region, compute_peaks, time_to_x, x_to_time
+from .logic import (
+    build_peak_pyramid,
+    clamp_region,
+    compute_peaks,
+    peaks_from_pyramid,
+    time_to_x,
+    x_to_time,
+)
 from .theme import ACCENT, ACCENT_2, BORDER, PINK, icon
 
 _HANDLE_GRAB_PX = 8
@@ -66,9 +74,18 @@ class _WaveCanvas(QWidget):
     def __init__(self, parent: QWidget | None = None) -> None:
         super().__init__(parent)
         self._mono: np.ndarray | None = None
+        self._mono_pyramid: list[np.ndarray] | None = None
         self._rendered_mono: np.ndarray | None = None
         self._rendered_peaks: list[tuple[float, float]] = []
         self._rendered_source_region: tuple[float, float] = (0.0, 0.0)
+        # Static-layer pixmap cache: everything except the playhead is rendered
+        # once per view/edit change and blitted on each repaint, so the 30 ms
+        # playhead poll no longer triggers a full waveform rebin.
+        self._static_pixmap: QPixmap | None = None
+        self._static_key: tuple | None = None
+        self._mono_version = 0
+        self._rendered_version = 0
+        self._transients_version = 0
         self.adsr: ADSR | None = None
         self.loop_enabled = False
         self.duration = 0.0
@@ -101,6 +118,11 @@ class _WaveCanvas(QWidget):
 
     def set_mono(self, mono: np.ndarray | None) -> None:
         self._mono = mono
+        self._mono_version += 1
+        if mono is None or mono.size == 0:
+            self._mono_pyramid = None
+        else:
+            self._mono_pyramid = build_peak_pyramid(np.asarray(mono, dtype=np.float32))
         self.update()
 
     def set_rendered_mono(self, mono: np.ndarray | None) -> None:
@@ -119,6 +141,7 @@ class _WaveCanvas(QWidget):
 
     def set_transients(self, times) -> None:
         self._transients = list(times or [])
+        self._transients_version += 1
         self.update()
 
     def set_show_transients(self, show: bool) -> None:
@@ -134,7 +157,8 @@ class _WaveCanvas(QWidget):
 
     def resizeEvent(self, event) -> None:
         super().resizeEvent(event)
-        self._recompute_rendered()
+        if event.size().width() != event.oldSize().width():
+            self._recompute_rendered()
         self.update()
 
     def _set_view(self, start: float, span: float) -> None:
@@ -201,10 +225,15 @@ class _WaveCanvas(QWidget):
 
     def _recompute_rendered(self) -> None:
         if self._rendered_mono is None or self._rendered_mono.size == 0:
-            self._rendered_peaks = []
-            return
-        width = self._region_peak_width(self._rendered_source_region)
-        self._rendered_peaks = compute_peaks(self._rendered_mono, width)
+            new_peaks: list[tuple[float, float]] = []
+        else:
+            width = self._region_peak_width(self._rendered_source_region)
+            new_peaks = compute_peaks(self._rendered_mono, width)
+        # Bump the cache-invalidation version only when the envelope truly changes,
+        # so a redundant recompute (e.g. a same-size resize) keeps the static cache.
+        if new_peaks != self._rendered_peaks:
+            self._rendered_peaks = new_peaks
+            self._rendered_version += 1
 
     def _x_to_time(self, x: float) -> float:
         view_start, view_end = self.view
@@ -472,17 +501,72 @@ class _WaveCanvas(QWidget):
 
     # --- painting ---
 
+    def _adsr_key(self) -> tuple | None:
+        a = self.adsr
+        if a is None:
+            return None
+        return (a.active, a.attack, a.decay, a.sustain, a.release)
+
+    def _static_cache_key(self) -> tuple:
+        """Identity of everything drawn into the static layer (all but playhead).
+
+        A version counter is bumped whenever the mono / rendered-peaks / transients
+        arrays are replaced, so the cached pixmap is reused across the playhead
+        poll and rebuilt only on an actual view/edit/data change.
+        """
+        return (
+            self.width(),
+            self.height(),
+            self.view,
+            self.region,
+            round(self.fade_in, 9),
+            round(self.fade_out, 9),
+            self.loop_enabled,
+            self._show_transients,
+            self._adsr_key(),
+            self._rendered_source_region,
+            self._mono_version,
+            self._rendered_version,
+            self._transients_version,
+        )
+
     def paintEvent(self, event) -> None:
-        painter = QPainter(self)
-        painter.setRenderHint(QPainter.RenderHint.Antialiasing, True)
         w, h = self.width(), self.height()
+        key = self._static_cache_key()
+        if (
+            self._static_pixmap is None
+            or self._static_key != key
+            or self._static_pixmap.size() != QSize(w, h)
+        ):
+            dpr = self.devicePixelRatioF()
+            pixmap = QPixmap(max(1, int(round(w * dpr))), max(1, int(round(h * dpr))))
+            pixmap.setDevicePixelRatio(dpr)
+            sp = QPainter(pixmap)
+            sp.setRenderHint(QPainter.RenderHint.Antialiasing, True)
+            self._paint_static(sp, w, h)
+            sp.end()
+            self._static_pixmap = pixmap
+            self._static_key = key
+
+        painter = QPainter(self)
+        painter.drawPixmap(0, 0, self._static_pixmap)
+        # Playhead is the only per-tick element — drawn over the cached layer so the
+        # 30 ms poll never rebins the waveform.
+        if self.playhead_time is not None and self.duration > 0:
+            view_start, view_end = self.view
+            if view_start <= self.playhead_time <= view_end:
+                x = self._time_to_x(self.playhead_time)
+                painter.setPen(QPen(QColor(70, 210, 255), 2))
+                painter.drawLine(x, 0, x, h)
+        painter.end()
+
+    def _paint_static(self, painter: QPainter, w: int, h: int) -> None:
         mid = h / 2.0
         painter.fillRect(0, 0, w, h, QColor("#10141d"))
 
         if self._mono is None or self._mono.size == 0:
             painter.setPen(QPen(QColor(BORDER), 1))
             painter.drawLine(0, int(mid), w, int(mid))
-            painter.end()
             return
 
         hx = self._handle_x()
@@ -509,17 +593,7 @@ class _WaveCanvas(QWidget):
         for a, b in intervals:
             if b <= a:
                 continue
-            samples = self._samples_for_interval(self._mono, 0.0, self.duration, a, b)
-            self._draw_waveform(
-                painter,
-                samples,
-                self._time_to_view_x(a),
-                self._time_to_view_x(b),
-                mid,
-                scale,
-                source_color,
-                source_color,
-            )
+            self._draw_source_envelope(painter, a, b, mid, scale, source_color)
 
         # Rendered edit preview remains anchored to the region that produced it
         # until the next debounced live render replaces it.
@@ -562,22 +636,44 @@ class _WaveCanvas(QWidget):
             ty = max(metrics.ascent() + 4, min(h - 4, metrics.ascent() + 8))
             painter.drawText(tx, ty, label)
 
-        if self.playhead_time is not None:
-            view_start, view_end = self.view
-            if view_start <= self.playhead_time <= view_end:
-                x = self._time_to_x(self.playhead_time)
-                painter.setPen(QPen(QColor(70, 210, 255), 2))
-                painter.drawLine(x, 0, x, h)
-
         if self._show_transients and self._transients:
-            view_start, view_end = self.view
             painter.setPen(QPen(QColor(120, 200, 255, 140), 1))
             for t in self._transients:
                 if view_start <= t <= view_end:
                     x = self._time_to_x(t)
                     painter.drawLine(x, 0, x, h)
 
-        painter.end()
+    def _draw_source_envelope(
+        self,
+        painter: QPainter,
+        a: float,
+        b: float,
+        mid: float,
+        scale: float,
+        color: QColor,
+    ) -> None:
+        """Draw the source waveform over time interval [a, b].
+
+        Uses the precomputed peak pyramid for the cheap zoomed-out rebin; falls
+        back to the exact per-sample polyline when fewer than ~3 samples map to a
+        pixel (extreme zoom-in).
+        """
+        mono = self._mono
+        if mono is None or mono.size == 0 or self.duration <= 0:
+            return
+        x0 = self._time_to_view_x(a)
+        x1 = self._time_to_view_x(b)
+        width = max(1, int(np.ceil(x1 - x0)))
+        i0 = max(0, min(mono.size, int(np.floor(a / self.duration * mono.size))))
+        i1 = max(i0 + 1, min(mono.size, int(np.ceil(b / self.duration * mono.size))))
+        if (i1 - i0) / float(width) <= 3.0:
+            self._draw_waveform(painter, mono[i0:i1], x0, x1, mid, scale, color, color)
+            return
+        if self._mono_pyramid:
+            peaks = peaks_from_pyramid(self._mono_pyramid, i0, i1, mono.size, width)
+        else:
+            peaks = compute_peaks(mono[i0:i1], width)
+        self._draw_peak_waveform(painter, peaks, x0, x1, mid, scale, color, color)
 
     def _adsr_points(self, start_x: float, end_x: float, height: int) -> list[QPointF]:
         if self.adsr is None or end_x <= start_x:

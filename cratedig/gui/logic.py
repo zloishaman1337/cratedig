@@ -158,6 +158,98 @@ def compute_peaks(samples: np.ndarray, width: int) -> list[tuple[float, float]]:
     return [(float(lo), float(hi)) for lo, hi in zip(mins, maxs)]
 
 
+def build_peak_pyramid(
+    samples: np.ndarray, levels: int = 8, base_bins: int = 8192
+) -> list[np.ndarray]:
+    """Build a multi-resolution (min, max) peak pyramid for a mono signal.
+
+    Level 0 reduces the cleaned signal to up to ``base_bins`` (min, max) pairs;
+    each subsequent level halves the pair count by merging adjacent pairs
+    (min-of-mins, max-of-maxs). Returns a list of (n, 2) float32 arrays, coarsest
+    last. Empty input yields []. Level 0 preserves the signal's global min/max.
+
+    Lets ``paintEvent`` rebin a few thousand pre-reduced pairs instead of millions
+    of raw samples on every zoom/pan frame.
+    """
+    clean = samples[np.isfinite(samples)]
+    if clean.size == 0:
+        return []
+
+    n0 = min(base_bins, clean.size)
+    edges = np.linspace(0, clean.size, n0 + 1, dtype=np.int64)
+    starts = edges[:-1]
+    mins = np.minimum.reduceat(clean, starts)[:n0]
+    maxs = np.maximum.reduceat(clean, starts)[:n0]
+    level = np.stack([mins, maxs], axis=1).astype(np.float32)
+    pyramid = [level]
+
+    for _ in range(1, max(1, levels)):
+        if level.shape[0] <= 1:
+            break
+        m = level.shape[0] // 2
+        paired = level[: 2 * m].reshape(m, 2, 2)
+        merged = np.stack([paired[:, :, 0].min(axis=1), paired[:, :, 1].max(axis=1)], axis=1)
+        if level.shape[0] % 2 == 1:  # carry the odd trailing pair
+            merged = np.vstack([merged, level[-1:]])
+        level = merged.astype(np.float32)
+        pyramid.append(level)
+
+    return pyramid
+
+
+def _rebin_pairs(pairs: np.ndarray, width: int) -> list[tuple[float, float]]:
+    """Reduce an (n, 2) array of (min, max) pairs to ``width`` (min, max) pairs."""
+    n = pairs.shape[0]
+    if n == 0 or width <= 0:
+        return []
+    n_bins = min(width, n)
+    edges = np.linspace(0, n, n_bins + 1, dtype=np.int64)
+    starts = edges[:-1]
+    mins = np.minimum.reduceat(pairs[:, 0], starts)[:n_bins]
+    maxs = np.maximum.reduceat(pairs[:, 1], starts)[:n_bins]
+    return [(float(lo), float(hi)) for lo, hi in zip(mins, maxs)]
+
+
+def peaks_from_pyramid(
+    pyramid: list[np.ndarray], i0: int, i1: int, total_samples: int, width: int
+) -> list[tuple[float, float]]:
+    """Rebin the sample range [i0, i1) of ``total_samples`` to ``width`` peak pairs.
+
+    Picks the coarsest pyramid level that still spans at least ``width`` pairs over
+    the range (falling back to the finest level), then rebins that slice. Returns
+    the same (min, max) envelope ``compute_peaks`` would, computed on pre-reduced
+    pairs instead of raw samples.
+    """
+    if not pyramid or width <= 0 or total_samples <= 0 or i1 <= i0:
+        return []
+
+    chosen = pyramid[0]
+    chosen_slice: tuple[int, int] = (0, chosen.shape[0])
+    for level in reversed(pyramid):  # coarsest first
+        n = level.shape[0]
+        j0 = max(0, min(n, int(np.floor(i0 / total_samples * n))))
+        j1 = max(j0 + 1, min(n, int(np.ceil(i1 / total_samples * n))))
+        if (j1 - j0) >= width:
+            chosen, chosen_slice = level, (j0, j1)
+            break
+    else:  # no level coarse-enough had width pairs — use finest level
+        n = chosen.shape[0]
+        j0 = max(0, min(n, int(np.floor(i0 / total_samples * n))))
+        j1 = max(j0 + 1, min(n, int(np.ceil(i1 / total_samples * n))))
+        chosen_slice = (j0, j1)
+
+    j0, j1 = chosen_slice
+    return _rebin_pairs(chosen[j0:j1], width)
+
+
+def version_status_text(current: str, latest: str | None = None) -> str:
+    """Bottom-left status text: 'cratedig <ver>', with an update suffix when newer."""
+    base = f"cratedig {current}"
+    if latest:
+        return f"{base}  ·  ⬆ {latest} available"
+    return base
+
+
 def tree_rows(
     nodes: dict[str, "FolderNode"],
     favorites: list["Sample"],

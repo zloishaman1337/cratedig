@@ -831,10 +831,8 @@ def parse_als(path: str) -> dict:
 
 
 def _match_plugin(name: str, stems: set) -> bool:
-    n = name.lower().strip()
-    if n in stems:
-        return True
-    for s in stems:
-        if n in s or s in n:
-            return True
-    return False
+    # Single source of truth lives in cratedig.plugins.scanner (shared with the
+    # installed-plugin badges). Kept as a thin alias for existing callers/tests.
+    from cratedig.plugins.scanner import match_name
+
+    return match_name(name, stems)

@@ -23,7 +23,11 @@ from PySide6.QtWidgets import (
 )
 
 from ..als.parser import parse_als
+from ..plugins.scanner import match_installed
 from .theme import ACCENT, ACCENT_2, ERROR, MUTED, PINK, WARN, icon
+
+# Device-name suffixes that mark a 3rd-party plugin (gets a real on-disk check).
+_THIRD_PARTY_SUFFIXES = ("[VST2]", "[VST3]", "[AU]", "[AAX]")
 
 # ── Colors ───────────────────────────────────────────────────────────────────
 # Neutral text ("" → inherit palette so it reads on any native theme); semantic
@@ -246,6 +250,7 @@ class ExpandableSamples(QWidget):
 
 class AlsExplorerPanel(QWidget):
     matchRequested = Signal(object)  # emitted with list[str] of ALS sample names
+    pluginScanRequested = Signal(bool)  # emitted with force flag to (re)scan plugins
     reveal_requested = Signal(str)
     add_to_crate_requested = Signal(object, int)
     create_crate_requested = Signal(object)
@@ -258,6 +263,7 @@ class AlsExplorerPanel(QWidget):
         self._match_seq = 0
         self._match_tab: QWidget | None = None
         self._crates: list = []
+        self._plugin_index = None  # InstalledIndex once a scan completes
 
         self._build_ui()
 
@@ -291,6 +297,30 @@ class AlsExplorerPanel(QWidget):
     def set_crates(self, crates: list) -> None:
         """Update the crates list used by the Library Match context menu."""
         self._crates = crates if crates is not None else []
+
+    def set_plugin_index(self, index) -> None:
+        """Store the installed-plugin index and refresh badges on the loaded project."""
+        self._plugin_index = index
+        if self._data is not None:
+            self._render(self._data)
+
+    @staticmethod
+    def _plugin_badge(dev_name: str, index) -> tuple[str, str] | None:
+        """Return (glyph, color) for an installed ✓ / missing ✗ badge, or None.
+
+        Native Live devices (no format suffix) ship with Live → ✓. Max for Live
+        devices can't be disk-checked → neutral "M4L". 3rd-party VST/AU/AAX rows
+        get a real check once an index is available (None = scan pending).
+        """
+        name = dev_name.strip()
+        if name.endswith("[M4L]"):
+            return ("M4L", C_M4L)
+        if not any(name.endswith(s) for s in _THIRD_PARTY_SUFFIXES):
+            return ("✓", C_OK)  # native Live device
+        if index is None:
+            return None  # scan pending
+        clean = name.rsplit(" [", 1)[0].strip()
+        return ("✓", C_OK) if match_installed(clean, index) else ("✗", C_ERR)
 
     # ── UI construction ────────────────────────────────────────────────────────
 
@@ -339,6 +369,12 @@ class AlsExplorerPanel(QWidget):
         self._btn_match.setEnabled(False)
         self._btn_match.clicked.connect(self._on_match_clicked)
         header_layout.addWidget(self._btn_match)
+
+        self._btn_rescan = QPushButton("Rescan plugins")
+        self._btn_rescan.setIcon(icon("refresh"))
+        self._btn_rescan.setMinimumWidth(120)
+        self._btn_rescan.clicked.connect(lambda: self.pluginScanRequested.emit(True))
+        header_layout.addWidget(self._btn_rescan)
 
         main_layout.addWidget(header)
 
@@ -462,6 +498,9 @@ class AlsExplorerPanel(QWidget):
         self._lbl_version.setText(data["ableton_version"])
         self._btn_match.setEnabled(True)
         self._render(data)
+        # Request a cached installed-plugin scan to populate badges (no-op if no
+        # worker is connected, e.g. in isolated panel tests).
+        self.pluginScanRequested.emit(False)
 
     def _on_match_clicked(self) -> None:
         if self._data is None:
@@ -709,6 +748,15 @@ class AlsExplorerPanel(QWidget):
                 dev_lbl = _colored_label(dev_name, dev_col, bold=True)
                 dev_lbl.setSizePolicy(QSizePolicy.Policy.Expanding, QSizePolicy.Policy.Preferred)
                 row_layout.addWidget(dev_lbl)
+
+                if mode in ("plugins", "instruments"):
+                    badge = self._plugin_badge(dev_name, self._plugin_index)
+                    if badge is not None:
+                        glyph, col = badge
+                        badge_lbl = _colored_label(glyph, col, bold=True, font_size=12)
+                        badge_lbl.setFixedWidth(30)
+                        badge_lbl.setAlignment(Qt.AlignmentFlag.AlignCenter)
+                        row_layout.addWidget(badge_lbl)
 
                 inner_layout.addWidget(row_f)
             inner_layout.addStretch()

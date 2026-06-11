@@ -11,6 +11,13 @@ VERSION="${1:-0.1.0}"
 ROOT="$(cd "$(dirname "$0")/../.." && pwd)"
 cd "$ROOT"
 
+# Auto-load the minisign key password from a gitignored .env so signing never
+# prompts. An already-exported MINISIGN_PASSWORD wins.
+if [[ -z "${MINISIGN_PASSWORD:-}" && -f "$ROOT/.env" ]]; then
+  _pw="$(sed -n 's/^[[:space:]]*MINISIGN_PASSWORD[[:space:]]*=[[:space:]]*//p' "$ROOT/.env" | head -n1)"
+  [[ -n "$_pw" ]] && export MINISIGN_PASSWORD="$_pw"
+fi
+
 echo "==> Python venv"
 if [[ ! -d .venv ]]; then
   python3 -m venv .venv

@@ -144,6 +144,14 @@ def set_library_dirs(doc: TOMLDocument, dirs: Sequence[str]) -> None:
     paths["library_dirs"] = new_array
 
 
+def set_plugin_scan_dirs(doc: TOMLDocument, dirs: Sequence[str]) -> None:
+    plugins = _ensure_table(doc, "plugins")
+    new_array = tomlkit.array()
+    for d in dirs:
+        new_array.append(d)
+    plugins["scan_dirs"] = new_array
+
+
 # ---------------------------------------------------------------------------
 # Mutators — audio
 # ---------------------------------------------------------------------------

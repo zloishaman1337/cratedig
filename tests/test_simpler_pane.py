@@ -380,3 +380,76 @@ class TestKnobDial:
         QTest.mouseDClick(knob._dial, Qt.MouseButton.LeftButton, Qt.KeyboardModifier.NoModifier, corner)
 
         assert pytest.approx(knob.value(), abs=0.01) == knob._default == 0.0
+
+
+class TestWaveCanvasPerf:
+    """Static-pixmap cache: playhead ticks must blit, not rebin the waveform."""
+
+    def _canvas(self, duration: float = 240.0, n: int = 500_000):
+        self._app = _app()
+        from cratedig.gui.simpler_pane import _WaveCanvas
+
+        canvas = _WaveCanvas()
+        canvas.resize(800, 120)
+        canvas.set_sample(duration)
+        t = np.linspace(0, duration, n, endpoint=False, dtype=np.float32)
+        mono = np.sin(2 * np.pi * 220.0 * t).astype(np.float32)
+        canvas.set_mono(mono)
+        return canvas
+
+    def test_set_mono_builds_pyramid(self):
+        canvas = self._canvas()
+        assert canvas._mono_pyramid is not None
+        assert len(canvas._mono_pyramid) >= 2
+
+    def test_playhead_ticks_reuse_static_pixmap(self):
+        canvas = self._canvas()
+        canvas.grab()  # initial render builds the static layer
+        first = canvas._static_pixmap
+        assert first is not None
+        for i in range(20):
+            canvas.set_playhead(i * 0.5)
+            canvas.grab()
+            assert canvas._static_pixmap is first  # cache reused, no rebuild
+
+    def test_playhead_ticks_do_not_rebin_waveform(self, monkeypatch):
+        canvas = self._canvas()
+        canvas.grab()  # warm the cache
+
+        import cratedig.gui.simpler_pane as sp
+
+        calls = {"n": 0}
+        real = sp.peaks_from_pyramid
+
+        def _spy(*a, **k):
+            calls["n"] += 1
+            return real(*a, **k)
+
+        monkeypatch.setattr(sp, "peaks_from_pyramid", _spy)
+        for i in range(15):
+            canvas.set_playhead(i * 0.7)
+            canvas.grab()
+        assert calls["n"] == 0  # playhead-only repaints never rebin
+
+    def test_zoom_change_rebuilds_static_pixmap(self):
+        canvas = self._canvas()
+        canvas.grab()
+        first = canvas._static_pixmap
+        canvas._zoom_at(2.0, 400)  # changes view span → must invalidate cache
+        canvas.grab()
+        assert canvas._static_pixmap is not first
+
+    def test_pyramid_path_used_when_zoomed_out(self, monkeypatch):
+        canvas = self._canvas(n=2_000_000)
+        import cratedig.gui.simpler_pane as sp
+
+        calls = {"n": 0}
+        real = sp.peaks_from_pyramid
+
+        def _spy(*a, **k):
+            calls["n"] += 1
+            return real(*a, **k)
+
+        monkeypatch.setattr(sp, "peaks_from_pyramid", _spy)
+        canvas.grab()  # full-view render of a 2M-sample signal
+        assert calls["n"] >= 1  # zoomed-out draw goes through the pyramid, not raw rebin

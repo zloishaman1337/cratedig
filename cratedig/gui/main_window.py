@@ -35,14 +35,23 @@ from ..db.database import Database
 from ..audio.features import ASPECTS
 from ..audio.editor import render_edit  # noqa: F401 — monkeypatch hook; preview renders on the worker thread
 from .download_pane import DownloadPane
-from .logic import filename_parts, filter_samples, is_sample_favorite, tree_rows
+from .logic import (
+    filename_parts,
+    filter_samples,
+    is_sample_favorite,
+    tree_rows,
+    version_status_text,
+)
 from .metadata_panel import MetadataPanel
 from .player import Player
 from .sample_table import SampleTable
 from .settings_dialog import SettingsDialog
 from .settings_tabs import _keys
 from .toast import ToastManager
-from .theme import app_icon, icon
+from .theme import ACCENT, app_icon, icon
+from .project_explorer import ProjectExplorerPanel
+from ..projects_fmt.bitwig import parse_bwproject
+from ..projects_fmt.nuendo import parse_npr
 from .tag_editor import TagEditor
 from .tree_pane import TreePane
 from .simpler_pane import SimplerPane
@@ -60,6 +69,7 @@ class MainWindow(QMainWindow):
     _render_requested = Signal(int, str, object)
     _preview_requested = Signal(int, str, object)
     _als_match_requested = Signal(int, object)
+    _plugin_scan_requested = Signal(object, bool)
 
     def __init__(self, db: Database, cfg: Config, parent: QWidget | None = None) -> None:
         super().__init__(parent)
@@ -260,14 +270,22 @@ class MainWindow(QMainWindow):
         self._main_splitter.addWidget(self._download_pane)
         self._main_splitter.setSizes([560, 140])
 
-        # --- stacked pages: 0 = samples, 1 = Ableton (ALS) explorer, 2 = Health ---
+        # --- stacked pages: 0 samples · 1 Ableton · 2 Health · 3 Bitwig · 4 Nuendo ---
         self._als_panel = AlsExplorerPanel()
         self._health_panel = HealthPanel()
+        self._bitwig_panel = ProjectExplorerPanel(
+            parse_bwproject, "Bitwig Project Checker", "Bitwig project (*.bwproject)"
+        )
+        self._nuendo_panel = ProjectExplorerPanel(
+            parse_npr, "Nuendo / Cubase Project Checker", "Nuendo/Cubase project (*.npr *.cpr)"
+        )
         self._pages = QStackedWidget()
         self._pages.setObjectName("PageSurface")
         self._pages.addWidget(self._main_splitter) # index 0 — samples
         self._pages.addWidget(self._als_panel)     # index 1 — Ableton
         self._pages.addWidget(self._health_panel)  # index 2 — Health
+        self._pages.addWidget(self._bitwig_panel)  # index 3 — Bitwig
+        self._pages.addWidget(self._nuendo_panel)  # index 4 — Nuendo
 
         # --- left sidebar navigator (always visible) ---
         self._settings_btn = QPushButton("Settings")
@@ -276,17 +294,23 @@ class MainWindow(QMainWindow):
         self._nav_samples = QPushButton("Samples")
         self._nav_ableton = QPushButton("Ableton")
         self._nav_health = QPushButton("Health")
+        self._nav_bitwig = QPushButton("Bitwig")
+        self._nav_nuendo = QPushButton("Nuendo")
         self._settings_btn.setIcon(icon("settings"))
         self._duplicates_btn.setIcon(icon("duplicates"))
         self._ab_compare_btn.setIcon(icon("compare"))
         self._nav_samples.setIcon(icon("samples"))
         self._nav_ableton.setIcon(icon("ableton"))
         self._nav_health.setIcon(icon("health"))
+        self._nav_bitwig.setIcon(icon("ableton"))
+        self._nav_nuendo.setIcon(icon("ableton"))
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
         for btn in (self._settings_btn, self._duplicates_btn, self._ab_compare_btn):
             btn.setMinimumHeight(38)
-        for idx, btn in enumerate((self._nav_samples, self._nav_ableton, self._nav_health)):
+        for idx, btn in enumerate(
+            (self._nav_samples, self._nav_ableton, self._nav_health, self._nav_bitwig, self._nav_nuendo)
+        ):
             btn.setCheckable(True)
             btn.setMinimumHeight(38)
             self._nav_group.addButton(btn, idx)
@@ -319,6 +343,8 @@ class MainWindow(QMainWindow):
         sidebar_layout.addWidget(section_library)
         sidebar_layout.addWidget(self._nav_samples)
         sidebar_layout.addWidget(self._nav_ableton)
+        sidebar_layout.addWidget(self._nav_bitwig)
+        sidebar_layout.addWidget(self._nav_nuendo)
         sidebar_layout.addWidget(self._nav_health)
         sidebar_layout.addStretch()
 
@@ -350,6 +376,14 @@ class MainWindow(QMainWindow):
         self._status_bar = QStatusBar()
         self.setStatusBar(self._status_bar)
         self._status_bar.messageChanged.connect(self._on_status_message)
+        import cratedig
+
+        self._pending_update_release = None
+        self._version_label = QLabel(version_status_text(cratedig.__version__))
+        self._version_label.setStyleSheet("color: #6d7f95; padding: 0 8px;")
+        self._version_label.setOpenExternalLinks(False)
+        self._version_label.linkActivated.connect(self._on_version_label_clicked)
+        self._status_bar.addWidget(self._version_label)
         self._operation_progress = QProgressBar()
         self._operation_progress.setFixedWidth(220)
         self._operation_progress.setTextVisible(True)
@@ -382,11 +416,19 @@ class MainWindow(QMainWindow):
         self._worker.stageReady.connect(self._simpler_pane.set_staged_render_path)
         self._worker.healthReady.connect(self._health_panel.set_report)
         self._worker.alsMatchReady.connect(self._on_als_match_ready)
+        self._worker.pluginIndexReady.connect(self._als_panel.set_plugin_index)
+        self._worker.pluginIndexReady.connect(self._bitwig_panel.set_plugin_index)
+        self._worker.pluginIndexReady.connect(self._nuendo_panel.set_plugin_index)
 
         self._als_panel.matchRequested.connect(self._on_als_match_requested)
         self._als_match_requested.connect(
             self._worker.request_als_match, Qt.ConnectionType.QueuedConnection
         )
+        self._plugin_scan_requested.connect(
+            self._worker.request_plugin_scan, Qt.ConnectionType.QueuedConnection
+        )
+        for _panel in (self._als_panel, self._bitwig_panel, self._nuendo_panel):
+            _panel.pluginScanRequested.connect(self._on_plugin_scan_requested)
 
         self._health_panel.refresh_requested.connect(self._on_health_refresh)
         self._health_panel.remove_missing_requested.connect(self._on_remove_missing)
@@ -646,6 +688,15 @@ class MainWindow(QMainWindow):
         import cratedig
         from PySide6.QtWidgets import QMessageBox
 
+        # Surface a persistent clickable hint bottom-left so the offer survives a
+        # dismissed dialog.
+        self._pending_update_release = release
+        self._version_label.setText(
+            f"cratedig {cratedig.__version__}  ·  "
+            f'<a href="#update" style="color:{ACCENT}; text-decoration:none;">'
+            f"⬆ {release.version} available</a>"
+        )
+
         box = QMessageBox(self)
         box.setWindowTitle("Update available")
         box.setText(
@@ -659,6 +710,15 @@ class MainWindow(QMainWindow):
         )
         if box.exec() == QMessageBox.StandardButton.Yes:
             self._start_update_download(release)
+
+    def _on_version_label_clicked(self, _href: str) -> None:
+        # Don't re-open the dialog (and risk a second download thread) while a
+        # download is already running.
+        existing = getattr(self, "_update_download", None)
+        if existing is not None and existing.isRunning():
+            return
+        if self._pending_update_release is not None:
+            self._on_update_available(self._pending_update_release)
 
     def _start_update_download(self, release) -> None:
         from .update_check import UpdateDownloadThread
@@ -1227,6 +1287,9 @@ class MainWindow(QMainWindow):
     def _on_als_match_requested(self, names) -> None:
         self._als_match_seq += 1
         self._als_match_requested.emit(self._als_match_seq, names)
+
+    def _on_plugin_scan_requested(self, force: bool) -> None:
+        self._plugin_scan_requested.emit(list(self._cfg.plugins.scan_dirs), force)
 
     def _on_als_match_ready(self, seq: int, result: dict) -> None:
         if seq != self._als_match_seq:

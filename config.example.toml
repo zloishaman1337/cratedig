@@ -18,6 +18,12 @@ analysis_sr = 22050
 # Audio file extensions treated as samples.
 extensions = [".wav", ".aiff", ".aif", ".flac", ".mp3", ".ogg", ".m4a"]
 
+[plugins]
+# Extra directories scanned for installed plugins (VST2/VST3/AU/AAX), in
+# addition to the standard OS plugin folders. Used to mark plugins referenced
+# by a project as installed ✓ / missing ✗.
+scan_dirs = []
+
 [sources]
 # Default download strategy for the legacy CLI text/URL path.
 # strategy = "combined" tries backends in `order` until one succeeds.

@@ -22,10 +22,10 @@ sessions skip the release stage entirely.
 ## Module status
 | module | state | note |
 |---|---|---|
-| config | ✅ | TOML → typed Config (stdlib `tomllib`, read-only, frozen); `_default_config_path()` uses user data dir when frozen; `_seed_config_if_frozen()` copies bundled `config.example.toml` → user dir on first run |
-| config_writer | ✅ | **tomlkit** comment-preserving writer; `resolve_config_path()` delegates to `config._default_config_path()` for default branch; `load_document`/`write_document` (atomic temp+`os.replace`); seeds from `config.example.toml` if target missing |
-| paths | ✅ | `cratedig/paths.py`; `is_frozen()`, `user_data_dir()` (platformdirs), `resource_root()`/`resource_path(name)`, `bundled_binary(name)`, `ffmpeg_path()`/`ffplay_path()` (bundled-or-`shutil.which`) |
-| db | ✅ | WAL mode; `upsert_sample(..., commit=True)`; `Database.commit()` for batch flush; `all_samples(limit: int\|None)`; `tags_for_all() -> dict[int, list[str]]` (one query, replaces N per-sample calls) |
+| config | ✅ | TOML → typed Config (stdlib `tomllib`, read-only, frozen); `_default_config_path()` uses user data dir when frozen; `_seed_config_if_frozen()` copies bundled `config.example.toml` → user dir on first run; `[plugins].scan_dirs` added (0.5.0) |
+| config_writer | ✅ | **tomlkit** comment-preserving writer; `resolve_config_path()` delegates to `config._default_config_path()`; `set_plugin_scan_dirs` added (0.5.0) |
+| paths | ✅ | `cratedig/paths.py`; `is_frozen()`, `user_data_dir()` (platformdirs), `resource_root()`/`resource_path(name)`, `bundled_binary(name)`, `ffmpeg_path()`/`ffplay_path()` |
+| db | ✅ | WAL mode; `upsert_sample(..., commit=True)`; `Database.commit()` for batch flush; `all_samples(limit: int\|None)`; `tags_for_all() -> dict[int, list[str]]` |
 | scan | ✅ | `scan_directory` parallelized via `ThreadPoolExecutor`; DB upserts batched; prunes deleted files; builds waveform PCM cache |
 | audio.features/similarity | ✅ | 193-dim vector; `ASPECT_BLOCKS`; `aspect_topk`+`cosine_topk`; `extract_features(path, sr, y=None)` |
 | audio.analyzer | ✅ | BPM/key/loudness/waveform; `Descriptors` has `centroid_norm`+`zcr` |
@@ -39,12 +39,15 @@ sessions skip the release stage entirely.
 | search.query | ✅ | parameterized SQL filters incl. category |
 | tui | ✅ | collapsible Tree; breadcrumb+DataTable per folder; `b` fav; `u` duplicates |
 | gui | ✅ | Global dark redesign; all subsystems wired |
-| gui.main_window | ✅ | `_preview_timer` 30ms; `_on_config_written()` prompts restart; `_maybe_check_updates()` silent startup check (frozen only); unified download+install on both OS: Win → `os.startfile`+quit; mac → `updater.apply_dmg_update(path)`+quit |
-| gui.simpler_pane | ✅ | Waveform pan/zoom lag fixed: removed dead `_recompute()`/`_peaks` double-compute; rendered-edit peaks recompute only on zoom-span change; panning is pure view shift + repaint |
+| gui.main_window | ✅ | 5 stacked sidebar pages (index 3=Bitwig, 4=Nuendo added 0.5.0); version label in QStatusBar; `_maybe_check_updates()` silent startup check; unified download+install both OS |
+| gui.simpler_pane | ✅ | **0.5.0**: `_WaveCanvas.paintEvent` blits cached static QPixmap (`_paint_static`); playhead drawn live only; mip peak pyramid for envelope; cache invalidated by version counters |
+| gui.project_explorer | ✅ | **NEW 0.5.0** `cratedig/gui/project_explorer.py`: `ProjectExplorerPanel` — generic panel for Bitwig/Nuendo; badges for format-suffixed 3rd-party plugins |
 | gui.update_check | ✅ | `UpdateCheckThread` (silent startup check) + `UpdateDownloadThread` (streams + minisign-verifies) |
-| gui.worker | ✅ | `request_reload()` uses `tags_for_all()` (batched, single query) instead of per-sample loop |
-| updater | ✅ | **ONLINE updater**. Pure layer: `FileEntry`/`UpdateManifest`/`ReleaseAsset`/`Release`, `sha256_file`, `manifest_sha256`, `build_update_zip_doc`, `load_update_manifest`, `is_newer`, `verify_payload`, `current_os`, `parse_release`, `select_asset`, `find_signature`. I/O: `fetch_latest_release`, `download_asset`, `minisign_path`, `verify_signature`, `download_and_verify`. macOS apply: `apply_update` (delta `.zip`), `apply_dmg_update` + `_write_dmg_restart_helper` (full `.dmg` mount→swap→relaunch). `GITHUB_REPO="zloishaman1337/cratedig"` hardcoded. `MINISIGN_PUBKEY` embedded (key id 54F217219B866BE6). |
-| als (parser) | ✅ | stdlib-only; `parse_als(path)→dict`; AU/VST2/VST3/M4L |
+| gui.worker | ✅ | `request_reload()` uses `tags_for_all()` (batched); `request_plugin_scan` slot + `pluginIndexReady` signal (0.5.0) |
+| updater | ✅ | **ONLINE updater**. `FileEntry`/`UpdateManifest`/`ReleaseAsset`/`Release`, `sha256_file`, `manifest_sha256`, `build_update_zip_doc`, `load_update_manifest`, `is_newer`, `verify_payload`, `current_os`, `parse_release`, `select_asset`, `find_signature`. I/O: `fetch_latest_release`, `download_asset`, `minisign_path`, `verify_signature`, `download_and_verify`. macOS apply: `apply_update` (delta `.zip`), `apply_dmg_update` + `_write_dmg_restart_helper`. `GITHUB_REPO="zloishaman1337/cratedig"` hardcoded. `MINISIGN_PUBKEY` embedded (key id 54F217219B866BE6). |
+| als (parser) | ✅ | stdlib-only; `parse_als(path)→dict`; AU/VST2/VST3/M4L; `_match_plugin` delegates to `scanner.match_name` (0.5.0) |
+| plugins.scanner | ✅ | **NEW 0.5.0** `cratedig/plugins/scanner.py`: `standard_plugin_dirs`, `scan_installed`, `match_name`/`match_installed`, `load_or_scan`; disk cache at `user_data_dir()/plugin_index.json` keyed by dir signature |
+| projects_fmt | ✅ | **NEW 0.5.0** `cratedig/projects_fmt/`: `common.py` (`read_project_bytes`, MAX_PROJECT_BYTES=256MB, `_AUDIO_RE` bounded), `bitwig.py` (`BtWg` header + string table + ZIP tail), `nuendo.py` (RIFF tagged tree). Returns `{format, version, plugins, samples, tracks}`. Security hardened (zip-bomb cap, bounds checks). |
 | sources.* | ✅ | youtube/yandex/freesound/manager; `safe_filename`+`unique_path`; `ffmpeg_location` yt-dlp opt from `bundled_binary` when frozen |
 | metadata (mb/discogs) | ✅ | incremental `metadata_cache`; `rank_track_hits(..., force_live=False)` |
 
@@ -57,12 +60,11 @@ sessions skip the release stage entirely.
 ## Packaging status
 | target | status | note |
 |---|---|---|
-| Windows onedir build | ✅ DONE 0.4.1 | `dist/cratedig/`; ~160 MB |
-| Windows installer | ✅ DONE 0.4.1 | `cratedig-setup-0.4.1.exe` ~160 MB signed; tier=FULL; per-user install |
-| Release manifests | ✅ DONE — both committed | `cratedig-0.4.1-win.json` (1d108c0) + `cratedig-0.4.1-mac.json` committed; mac diff vs 0.4.0-mac: changed=5 added=0 deleted=0 → tier=full |
-| Windows GitHub release | ✅ published to GitHub release 0.4.1 (signed) | `cratedig-setup-0.4.1.exe` + `.minisig` attached; https://github.com/zloishaman1337/cratedig/releases/tag/0.4.1 |
-| macOS `.app` + `.dmg` | ✅ DONE 0.4.1 | full `cratedig-0.4.1.dmg` (~171 MB) signed; published to GitHub release 0.4.1 |
-| macOS GitHub release | ✅ published to GitHub release 0.4.1 (signed) | `cratedig-0.4.1.dmg` + `.minisig` attached; https://github.com/zloishaman1337/cratedig/releases/tag/0.4.1; verified against embedded MINISIGN_PUBKEY |
+| Windows onedir build | ✅ DONE 0.5.0 | `dist/cratedig/`; ~168 MB |
+| Windows installer | ✅ DONE 0.5.0 | `cratedig-setup-0.5.0.exe` signed; tier=FULL (delta built but not published — client can't consume delta yet) |
+| Release manifests | ✅ Win committed-pending | `cratedig-0.5.0-win.json` untracked; mac pending Session 2 |
+| Windows GitHub release | ✅ published 0.5.0 (signed) | `cratedig-setup-0.5.0.exe` + `.minisig`; https://github.com/zloishaman1337/cratedig/releases/tag/0.5.0 |
+| macOS `.app` + `.dmg` | ⏳ PENDING Session 2 | full `.dmg` (client can't consume delta yet → ship full) |
 | GitHub Actions CI | ⏳ written, not run | `.github/workflows/release.yml` matrix; fires on tag |
 
 ## Gotchas
@@ -84,26 +86,34 @@ sessions skip the release stage entirely.
 - **Version is dual-SSOT-mirrored**: `pyproject.toml` (authoritative) AND `cratedig/__init__.__version__` (runtime). Bump BOTH together.
 - **pytest lives in `[dev]` extra** — build venv lacks it. Run `pip install -e ".[dev]"` before pytest.
 - **Updater manifest hash**: `updater.manifest_sha256` (canonical JSON, sorted keys) — never hand-roll a second hash.
-- **Baseline trap (0.4.0)**: 0.2/0.3 installs have no update checker — cannot auto-pull 0.4.0+. Distribute full installers manually to those users. Auto-update works between 0.4.x releases.
-- **minisign.key in repo root, gitignored**. Back it up and copy to mac before Session 2. Password via `$env:MINISIGN_PASSWORD`. Never commit the key.
+- **Baseline trap (0.4.0)**: 0.2/0.3 installs have no update checker — cannot auto-pull 0.4.0+. Distribute full installers manually to those users.
+- **minisign.key in repo root, gitignored**. Back it up and copy to mac before Session 2. **Password auto-loads from gitignored `.env` (`MINISIGN_PASSWORD=…`)** in both `build_all.ps1` and `build_all.sh`; env var wins if already set. `.env` added to `.gitignore`. Agent must read `.env`, never ask the user.
 - **GITHUB_REPO hardcoded** as `"zloishaman1337/cratedig"` — do not auto-detect from git remote.
 - **PyInstaller rewrites `base_library.zip` every build** (churned sha256, identical size) — allowlisted in `make_manifest.py` `DEFAULT_APP_PATHS` so it doesn't force tier=full on code-only diffs.
 - **`apply_dmg_update` is macOS-only** — raises immediately on non-Darwin; off-platform guard tested in `tests/test_updater_online.py`.
-- **Online client still requests `tier="full"`** — `UpdateDownloadThread` calls `download_and_verify` with default `tier="full"`; delta-over-the-wire is not wired client-side yet (0.5.0+ backlog).
+- **Online client still requests `tier="full"`** — `UpdateDownloadThread` calls `download_and_verify` with default `tier="full"`; delta-over-the-wire is not wired client-side yet. Ship FULL until fixed.
+- **0.5.0 shipped FULL despite delta-tier diff** — auto diff reported `changed=3 added=0 → tier=delta` but full was published because the online client always fetches full asset. Delta `cratedig-update-0.5.0.exe` was built but NOT published.
 
-## Verification (0.4.1)
-- Full pytest: **849 passed, 0 failed** (added: `test_tags_for_all_returns_sorted_map`, `test_tags_for_all_empty_database` in `tests/test_database.py`; `test_tier_delta_when_only_exe_and_base_library_change` in `tests/test_make_manifest.py`).
-- Frozen `dist/cratedig/cratedig.exe` (0.4.1) smoke-launched on Windows — alive 8s, clean stop.
-- `cratedig-setup-0.4.1.exe` minisign signature VERIFIED end-to-end against embedded `MINISIGN_PUBKEY` ("Signature and comment signature verified").
-- Live GitHub feed post-publish: `updater.fetch_latest_release()` returns 0.4.1; `is_newer(0.4.1, 0.4.0)` True; `select_asset(win, full)` → cratedig-setup-0.4.1.exe + .minisig; source archives absent. Running 0.4.0 will detect and offer 0.4.1 on startup.
-- macOS full `dist/cratedig.app` (0.4.1) smoke-launched — alive 6s+, clean quit (PID 51953).
-- `cratedig-0.4.1.dmg` minisign signature VERIFIED end-to-end ("Signature and comment signature verified", trusted comment "cratedig 0.4.1"). Live feed: `updater.fetch_latest_release()`→0.4.1; `select_asset(mac, full)`→cratedig-0.4.1.dmg + .minisig; no source archives; `is_newer(0.4.1,0.4.0)` True.
+## Verification (0.5.0)
+- Full pytest: **918 passed, 0 failed**. New test files: `test_plugin_scanner.py`, `test_plugin_badges.py`, `test_projects_fmt.py`, `test_project_explorer.py`; extended `test_gui_logic.py` (pyramid + version_status_text), `test_simpler_pane.py` (TestWaveCanvasPerf), `test_als.py` (5 stacked pages).
+- Frozen `dist\cratedig\cratedig.exe` (0.5.0) smoke-launched — alive 8s, clean stop.
+- `cratedig-setup-0.5.0.exe` minisign VERIFIED ("Signature and comment signature verified", trusted comment "cratedig 0.5.0").
+- Live feed: `fetch_latest_release()`→0.5.0; `is_newer(0.5.0,0.4.1)` True; `select_asset(win,full)`→cratedig-setup-0.5.0.exe + .minisig. Running 0.4.1 will auto-detect 0.5.0 on startup.
 
-## macOS HANDOFF — none
+## macOS HANDOFF — PENDING
+- **version**: 0.5.0
+- **tier**: full (online client can't consume delta yet → ship full `.dmg`, not delta `.zip`)
+- **windows update**: DONE (`cratedig-setup-0.5.0.exe`, signed + published + verified)
+- **macos update**: PENDING
+- **source ref**: branch `main` — NOT YET COMMITTED; user must `git commit` + `git push` the 0.5.0 changes before `git pull` on mac
+- **changed files**: `cratedig/gui/simpler_pane.py`, `cratedig/gui/logic.py`, `cratedig/gui/main_window.py`, `cratedig/gui/project_explorer.py` (new), `cratedig/plugins/scanner.py` (new), `cratedig/plugins/__init__.py` (new), `cratedig/projects_fmt/` (new package), `cratedig/als/parser.py`, `cratedig/gui/worker.py`, `config.py`, `config_writer.py`, `config.example.toml`, `paths_tab.py`, `pyproject.toml`, `cratedig/__init__.py`
+- **new deps/assets**: none beyond the usual ffmpeg/ffplay/minisign that `build_all.sh` fetches; `config.example.toml` changed (bundled asset — rebuild required)
+- **build command**: `SIGN=1 PUBLISH=1 bash packaging/macos/build_all.sh 0.5.0` (password auto-loads from `.env`; transfer `minisign.key` + `.env` to mac first)
+- **notes**: ship full `.dmg`; full pytest green at 918 on Windows
 
 ## Backlog
-- **0.4.0 distribute manually**: hand 0.4.0+ full installers to existing 0.2/0.3 users — they have no update checker. 0.4.1 auto-updates fine for anyone already on 0.4.0.
-- **Delta-over-the-wire (0.5.0+)**: wire client-side `tier="delta"` in `UpdateDownloadThread`/`download_and_verify` before a delta can ship online. Build-level delta detection already works (validated 0.4.0→0.4.1: `make_manifest diff` reports tier=delta for code-only change after base_library.zip allowlisted; still shipped FULL because client always requests full).
+- **0.4.0 distribute manually**: hand 0.4.0+ full installers to existing 0.2/0.3 users — they have no update checker.
+- **Delta-over-the-wire (0.6.0+)**: wire client-side `tier="delta"` in `UpdateDownloadThread`/`download_and_verify` before a delta can ship online. Build-level delta detection already works; still ships FULL because client always requests full.
 - Exercise CI workflow (`.github/workflows/release.yml`) end-to-end on a pushed `v*` tag.
 - Optional: Windows EV code-signing cert and macOS notarization (Apple Dev ID $99/yr).
 - Consider hnswlib ANN for large libraries (brute force fine at personal scale).
@@ -123,3 +133,4 @@ sessions skip the release stage entirely.
 - `README.md` — end-user install guide
 - `README.dev.md` — developer setup guide
 - `docs/SETTINGS_DESIGN.md` — Settings dialog + config_writer blueprint
+- `docs/PLAN_0.5.0.md` — 0.5.0 feature blueprints (all 4 features shipped)

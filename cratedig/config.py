@@ -29,11 +29,17 @@ class AudioCfg:
 
 
 @dataclass(frozen=True)
+class PluginsCfg:
+    scan_dirs: tuple[str, ...] = ()
+
+
+@dataclass(frozen=True)
 class Config:
     paths: Paths
     audio: AudioCfg
     sources: dict = field(default_factory=dict)
     metadata: dict = field(default_factory=dict)
+    plugins: PluginsCfg = field(default_factory=PluginsCfg)
     root: Path = Path(".")
 
     def source(self, name: str) -> dict:
@@ -100,10 +106,15 @@ def load_config(path: str | os.PathLike | None = None) -> Config:
         extensions=tuple(e.lower() for e in a.get("extensions", AudioCfg.extensions)),
     )
 
+    pl = raw.get("plugins", {})
+    scan_dirs = pl.get("scan_dirs", [])
+    plugins = PluginsCfg(scan_dirs=tuple(str(d) for d in scan_dirs))
+
     return Config(
         paths=paths,
         audio=audio,
         sources=raw.get("sources", {}),
         metadata=raw.get("metadata", {}),
+        plugins=plugins,
         root=root,
     )

@@ -39,6 +39,7 @@ class IndexWorker(QObject):
     stageReady = Signal(int, str)               # (seq, staged_wav_path) — drag pre-render
     healthReady = Signal(object)                # (HealthReport)
     alsMatchReady = Signal(int, object)         # (seq, match_result_dict)
+    pluginIndexReady = Signal(object)           # (InstalledIndex)
 
     def __init__(self, db: Database, cfg: Config, parent: QObject | None = None) -> None:
         super().__init__(parent)
@@ -473,6 +474,17 @@ class IndexWorker(QObject):
             self.alsMatchReady.emit(seq, result)
         except Exception as exc:  # noqa: BLE001
             self.failed.emit("als_match", str(exc))
+
+    @Slot(object, bool)
+    def request_plugin_scan(self, custom_dirs, force: bool) -> None:
+        """Scan installed plugins (cached unless force) and emit the index."""
+        try:
+            from cratedig.plugins.scanner import load_or_scan
+
+            index = load_or_scan(list(custom_dirs or []), force=force)
+            self.pluginIndexReady.emit(index)
+        except Exception as exc:  # noqa: BLE001
+            self.failed.emit("plugin_scan", str(exc))
 
     @Slot(object)
     def request_download(self, hit) -> None:

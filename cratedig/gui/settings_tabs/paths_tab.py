@@ -69,6 +69,7 @@ class PathsTab(QWidget):
         paths = doc.get("paths", {})
         sources = doc.get("sources", {})
         metadata = doc.get("metadata", {})
+        plugins = doc.get("plugins", {})
 
         scroll = QScrollArea(self)
         scroll.setWidgetResizable(True)
@@ -84,6 +85,7 @@ class PathsTab(QWidget):
         layout.setSpacing(10)
 
         layout.addWidget(self._build_library_dirs_group(paths))
+        layout.addWidget(self._build_plugin_dirs_group(plugins))
         layout.addWidget(self._build_paths_group(paths))
         layout.addWidget(self._build_tokens_group(doc))
 
@@ -128,6 +130,44 @@ class PathsTab(QWidget):
         item = QListWidgetItem(f"{badge} {path}")
         item.setData(Qt.ItemDataRole.UserRole, path)
         self._dirs_list.addItem(item)
+
+    def _build_plugin_dirs_group(self, plugins: dict) -> QGroupBox:
+        box = QGroupBox("Plugin scan folders")
+        box.setObjectName("SettingsGroup")
+        layout = _group_layout(box)
+
+        self._plugin_dirs_list = QListWidget()
+        for d in plugins.get("scan_dirs", []):
+            self._add_plugin_dir_item(str(d))
+        layout.addWidget(self._plugin_dirs_list)
+
+        btn_row = QHBoxLayout()
+        add_btn = QPushButton("Add")
+        add_btn.clicked.connect(self._on_add_plugin_dir)
+        remove_btn = QPushButton("Remove")
+        remove_btn.clicked.connect(self._on_remove_plugin_dir)
+        for b in (add_btn, remove_btn):
+            btn_row.addWidget(b)
+        btn_row.addStretch()
+        layout.addLayout(btn_row)
+        return box
+
+    def _add_plugin_dir_item(self, path: str) -> None:
+        exists = Path(path).is_dir()
+        badge = "✅" if exists else "❌"
+        item = QListWidgetItem(f"{badge} {path}")
+        item.setData(Qt.ItemDataRole.UserRole, path)
+        self._plugin_dirs_list.addItem(item)
+
+    def _on_add_plugin_dir(self) -> None:
+        path = QFileDialog.getExistingDirectory(self, "Select plugin folder")
+        if path:
+            self._add_plugin_dir_item(path)
+
+    def _on_remove_plugin_dir(self) -> None:
+        row = self._plugin_dirs_list.currentRow()
+        if row >= 0:
+            self._plugin_dirs_list.takeItem(row)
 
     def _build_paths_group(self, paths: dict) -> QGroupBox:
         box = QGroupBox("Paths")
@@ -268,6 +308,12 @@ class PathsTab(QWidget):
             for i in range(self._dirs_list.count())
         ]
         config_writer.set_library_dirs(doc, dirs)
+
+        plugin_dirs = [
+            self._plugin_dirs_list.item(i).data(Qt.ItemDataRole.UserRole)
+            for i in range(self._plugin_dirs_list.count())
+        ]
+        config_writer.set_plugin_scan_dirs(doc, plugin_dirs)
 
         dl = self._download_dir.text().strip()
         if dl:

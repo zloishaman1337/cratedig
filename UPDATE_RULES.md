@@ -227,6 +227,10 @@ When no release is mid-flight, this section reads `## macOS HANDOFF — none`.
   `verify_signature()` before returning the installer path.
 - **Key password** is read from `$env:MINISIGN_PASSWORD` (Windows) /
   `$MINISIGN_PASSWORD` (macOS); piped to `minisign` stdin. Never hardcode it.
+  Both `build_all.ps1` and `build_all.sh` auto-load it from a **gitignored `.env`**
+  (`MINISIGN_PASSWORD=…` line) at the repo root when the env var is unset, so the
+  signer is never prompted. The agent reads `.env` for the password and must not
+  ask the user for it. `.env` is in `.gitignore` — never commit it.
 - macOS session never bumps the version — it consumes Session 1's version.
 - Never ship a macOS update whose version has no matching Windows update
   published on the same GitHub release.
@@ -234,7 +238,12 @@ When no release is mid-flight, this section reads `## macOS HANDOFF — none`.
   `from_versions`; otherwise the app demands a full installer (§7).
 - The `documentation` agent is the ONLY writer of COMPACT.md, including the
   handoff block (CLAUDE.md §5).
-- No agent commits or pushes — the user approves all commits.
+- **Commits/pushes are authorized** — the agent MAY `git commit` and `git push`
+  release/session changes automatically, without asking. They MUST be made under
+  the user's git identity (the repo's configured `user.name`/`user.email` =
+  `zloishaman1337`), NEVER under the agent's name: do **not** add a
+  `Co-Authored-By: Claude` trailer or any other agent attribution to the commit.
+  Never use `--no-verify`/`--no-gpg-sign` or force-push without explicit consent.
 - Meta-only sessions (§1) MUST NOT bump the version or produce update files.
 
 ---

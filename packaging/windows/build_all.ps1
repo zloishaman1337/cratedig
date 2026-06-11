@@ -20,6 +20,17 @@ $ErrorActionPreference = "Stop"
 $Root = (Resolve-Path "$PSScriptRoot\..\..").Path
 Set-Location $Root
 
+# Auto-load the minisign key password from a gitignored .env (KEY=VALUE lines) so
+# signing never has to prompt. An already-set environment variable wins.
+$envFile = Join-Path $Root ".env"
+if (-not $env:MINISIGN_PASSWORD -and (Test-Path $envFile)) {
+    foreach ($line in Get-Content $envFile) {
+        if ($line -match '^\s*MINISIGN_PASSWORD\s*=\s*(.+?)\s*$') {
+            $env:MINISIGN_PASSWORD = $Matches[1]
+        }
+    }
+}
+
 Write-Host "==> Python venv"
 if (-not (Test-Path .venv)) { python -m venv .venv }
 & .\.venv\Scripts\python.exe -m pip install -U pip

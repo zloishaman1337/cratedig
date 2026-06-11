@@ -12,6 +12,7 @@ from cratedig.gui.logic import (
     compute_peaks, filename_parts, filter_samples, hit_rows, resolve_similar, tree_rows,
     is_sample_favorite, similar_name, format_metadata, file_urls,
     time_to_x, x_to_time, clamp_region,
+    build_peak_pyramid, peaks_from_pyramid,
 )
 from cratedig.sources.base import SearchHit
 from cratedig.tui.browser import FolderNode
@@ -2546,3 +2547,104 @@ class TestFilterSamples:
     def test_missing_tags_entry_excluded_when_tags_required(self):
         s = self._samples()
         assert filter_samples(s, {}, "", ["punchy"]) == []
+
+
+class TestVersionStatusText:
+    def test_no_update(self):
+        from cratedig.gui.logic import version_status_text
+
+        assert version_status_text("0.5.0") == "cratedig 0.5.0"
+        assert version_status_text("0.5.0", None) == "cratedig 0.5.0"
+
+    def test_with_update(self):
+        from cratedig.gui.logic import version_status_text
+
+        text = version_status_text("0.5.0", "0.5.1")
+        assert text.startswith("cratedig 0.5.0")
+        assert "0.5.1" in text and "available" in text
+
+
+class TestBuildPeakPyramid:
+    """Test build_peak_pyramid(samples, levels, base_bins) -> list[np.ndarray]."""
+
+    def test_empty_input_returns_empty(self):
+        assert build_peak_pyramid(np.array([], dtype=np.float32)) == []
+
+    def test_all_non_finite_returns_empty(self):
+        s = np.array([np.nan, np.inf, -np.inf], dtype=np.float32)
+        assert build_peak_pyramid(s) == []
+
+    def test_level0_preserves_global_min_max(self):
+        s = np.sin(np.linspace(0, 8 * math.pi, 50_000, dtype=np.float32)).astype(np.float32)
+        pyr = build_peak_pyramid(s, levels=8, base_bins=4096)
+        lvl0 = pyr[0]
+        assert abs(float(lvl0[:, 0].min()) - float(s.min())) < 1e-4
+        assert abs(float(lvl0[:, 1].max()) - float(s.max())) < 1e-4
+
+    def test_each_level_halves_pair_count(self):
+        s = np.linspace(-1, 1, 100_000, dtype=np.float32)
+        pyr = build_peak_pyramid(s, levels=6, base_bins=8192)
+        assert len(pyr) == 6
+        for i in range(1, len(pyr)):
+            assert pyr[i].shape[0] == pyr[i - 1].shape[0] // 2
+        for level in pyr:
+            assert level.ndim == 2 and level.shape[1] == 2
+
+    def test_global_extremes_survive_to_coarsest_level(self):
+        s = np.zeros(20_000, dtype=np.float32)
+        s[1234] = 0.9   # spike up
+        s[9876] = -0.8  # spike down
+        pyr = build_peak_pyramid(s, levels=8, base_bins=4096)
+        coarsest = pyr[-1]
+        assert float(coarsest[:, 1].max()) >= 0.89
+        assert float(coarsest[:, 0].min()) <= -0.79
+
+    def test_short_input_single_level(self):
+        s = np.array([0.5], dtype=np.float32)
+        pyr = build_peak_pyramid(s)
+        assert len(pyr) == 1
+        assert pyr[0].shape == (1, 2)
+        assert pyr[0][0, 0] == 0.5 and pyr[0][0, 1] == 0.5
+
+
+class TestPeaksFromPyramid:
+    """Test peaks_from_pyramid(pyramid, i0, i1, total, width) matches compute_peaks envelope."""
+
+    def test_empty_pyramid_returns_empty(self):
+        assert peaks_from_pyramid([], 0, 100, 100, 50) == []
+
+    def test_full_range_envelope_matches_compute_peaks(self):
+        s = np.sin(np.linspace(0, 12 * math.pi, 200_000, dtype=np.float32)).astype(np.float32)
+        pyr = build_peak_pyramid(s, levels=10, base_bins=16384)
+        width = 800
+        pyr_peaks = peaks_from_pyramid(pyr, 0, s.size, s.size, width)
+        ref = compute_peaks(s, width)
+        assert len(pyr_peaks) == width
+        # Envelope (per-bin max minus min) should track the reference closely.
+        pyr_spread = np.array([hi - lo for lo, hi in pyr_peaks])
+        ref_spread = np.array([hi - lo for lo, hi in ref])
+        assert np.median(np.abs(pyr_spread - ref_spread)) < 0.05
+        # Global extremes preserved within tolerance.
+        assert abs(min(lo for lo, _ in pyr_peaks) - float(s.min())) < 0.05
+        assert abs(max(hi for _, hi in pyr_peaks) - float(s.max())) < 0.05
+
+    def test_sub_range_only_covers_that_slice(self):
+        s = np.concatenate([
+            np.zeros(50_000, dtype=np.float32),
+            np.full(50_000, 0.7, dtype=np.float32),
+        ])
+        pyr = build_peak_pyramid(s, levels=10, base_bins=16384)
+        # First half is silent: its envelope max should be ~0.
+        first = peaks_from_pyramid(pyr, 0, 50_000, s.size, 200)
+        assert max(hi for _, hi in first) < 0.05
+        # Second half is 0.7: its envelope should reflect that.
+        second = peaks_from_pyramid(pyr, 50_000, 100_000, s.size, 200)
+        assert max(hi for _, hi in second) > 0.6
+
+    def test_width_capped_to_available_pairs(self):
+        s = np.linspace(-1, 1, 10_000, dtype=np.float32)
+        pyr = build_peak_pyramid(s, levels=10, base_bins=16384)
+        peaks = peaks_from_pyramid(pyr, 0, s.size, s.size, 1000)
+        assert 0 < len(peaks) <= 1000
+        for lo, hi in peaks:
+            assert lo <= hi

@@ -447,7 +447,7 @@ def test_als_explorer_gui_tab_count(als_file):
 
 
 def test_main_window_has_stacked_pages(tmp_path):
-    """Smoke test: MainWindow embeds samples + ALS + Health as 3 stacked pages with a sidebar."""
+    """Smoke test: MainWindow embeds samples + ALS + Health + Bitwig + Nuendo as stacked pages."""
     pytest.importorskip("PySide6")
 
     from PySide6.QtWidgets import QApplication, QStackedWidget
@@ -468,7 +468,7 @@ def test_main_window_has_stacked_pages(tmp_path):
 
     stack = w.findChild(QStackedWidget)
     assert stack is not None
-    assert stack.count() == 3
+    assert stack.count() == 5  # samples · Ableton · Health · Bitwig · Nuendo
     assert isinstance(stack.widget(1), AlsExplorerPanel)
     assert isinstance(stack.widget(2), HealthPanel)
 
