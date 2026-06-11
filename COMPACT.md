@@ -62,9 +62,9 @@ sessions skip the release stage entirely.
 |---|---|---|
 | Windows onedir build | ✅ DONE 0.5.0 | `dist/cratedig/`; ~168 MB |
 | Windows installer | ✅ DONE 0.5.0 | `cratedig-setup-0.5.0.exe` signed; tier=FULL (delta built but not published — client can't consume delta yet) |
-| Release manifests | ✅ Win committed-pending | `cratedig-0.5.0-win.json` untracked; mac pending Session 2 |
+| Release manifests | ✅ win + mac 0.5.0 | `cratedig-0.5.0-win.json` + `cratedig-0.5.0-mac.json` produced; mac manifest committed this session |
 | Windows GitHub release | ✅ published 0.5.0 (signed) | `cratedig-setup-0.5.0.exe` + `.minisig`; https://github.com/zloishaman1337/cratedig/releases/tag/0.5.0 |
-| macOS `.app` + `.dmg` | ⏳ PENDING Session 2 | full `.dmg` (client can't consume delta yet → ship full) |
+| macOS `.app` + `.dmg` | ✅ DONE 0.5.0 | full `cratedig-0.5.0.dmg` signed + published + verified |
 | GitHub Actions CI | ⏳ written, not run | `.github/workflows/release.yml` matrix; fires on tag |
 
 ## Gotchas
@@ -99,17 +99,10 @@ sessions skip the release stage entirely.
 - Frozen `dist\cratedig\cratedig.exe` (0.5.0) smoke-launched — alive 8s, clean stop.
 - `cratedig-setup-0.5.0.exe` minisign VERIFIED ("Signature and comment signature verified", trusted comment "cratedig 0.5.0").
 - Live feed: `fetch_latest_release()`→0.5.0; `is_newer(0.5.0,0.4.1)` True; `select_asset(win,full)`→cratedig-setup-0.5.0.exe + .minisig. Running 0.4.1 will auto-detect 0.5.0 on startup.
+- macOS `cratedig-0.5.0.dmg` built (171.6 MB), signed, minisign VERIFIED ("Signature and comment signature verified", trusted comment "cratedig 0.5.0"), smoke-launched alive >6s clean quit, CFBundleShortVersionString=0.5.0.
 
-## macOS HANDOFF — PENDING
-- **version**: 0.5.0
-- **tier**: full (online client can't consume delta yet → ship full `.dmg`, not delta `.zip`)
-- **windows update**: DONE (`cratedig-setup-0.5.0.exe`, signed + published + verified)
-- **macos update**: PENDING
-- **source ref**: branch `main` — NOT YET COMMITTED; user must `git commit` + `git push` the 0.5.0 changes before `git pull` on mac
-- **changed files**: `cratedig/gui/simpler_pane.py`, `cratedig/gui/logic.py`, `cratedig/gui/main_window.py`, `cratedig/gui/project_explorer.py` (new), `cratedig/plugins/scanner.py` (new), `cratedig/plugins/__init__.py` (new), `cratedig/projects_fmt/` (new package), `cratedig/als/parser.py`, `cratedig/gui/worker.py`, `config.py`, `config_writer.py`, `config.example.toml`, `paths_tab.py`, `pyproject.toml`, `cratedig/__init__.py`
-- **new deps/assets**: none beyond the usual ffmpeg/ffplay/minisign that `build_all.sh` fetches; `config.example.toml` changed (bundled asset — rebuild required)
-- **build command**: `SIGN=1 PUBLISH=1 bash packaging/macos/build_all.sh 0.5.0` (password auto-loads from `.env`; transfer `minisign.key` + `.env` to mac first)
-- **notes**: ship full `.dmg`; full pytest green at 918 on Windows
+## macOS HANDOFF — none
+No release is mid-flight. Both Windows and macOS have shipped 0.5.0.
 
 ## Backlog
 - **0.4.0 distribute manually**: hand 0.4.0+ full installers to existing 0.2/0.3 users — they have no update checker.
