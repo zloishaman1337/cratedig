@@ -93,6 +93,7 @@ sessions skip the release stage entirely.
 - **`apply_dmg_update` is macOS-only** — raises immediately on non-Darwin; off-platform guard tested in `tests/test_updater_online.py`.
 - **Online client still requests `tier="full"`** — `UpdateDownloadThread` calls `download_and_verify` with default `tier="full"`; delta-over-the-wire is not wired client-side yet. Ship FULL until fixed.
 - **0.5.0 shipped FULL despite delta-tier diff** — auto diff reported `changed=3 added=0 → tier=delta` but full was published because the online client always fetches full asset. Delta `cratedig-update-0.5.0.exe` was built but NOT published.
+- **0.4.1→0.5.0 auto-update is broken** (crash + no progress, see Backlog) — distribute 0.5.0 `.dmg` manually to 0.4.1 users; auto-update only reliable from 0.5.1+.
 
 ## Verification (0.5.0)
 - Full pytest: **918 passed, 0 failed**. New test files: `test_plugin_scanner.py`, `test_plugin_badges.py`, `test_projects_fmt.py`, `test_project_explorer.py`; extended `test_gui_logic.py` (pyramid + version_status_text), `test_simpler_pane.py` (TestWaveCanvasPerf), `test_als.py` (5 stacked pages).
@@ -105,6 +106,8 @@ sessions skip the release stage entirely.
 No release is mid-flight. Both Windows and macOS have shipped 0.5.0.
 
 ## Backlog
+- **0.5.1 updater crash (HIGH)**: quitting mid-download aborts — `UpdateDownloadThread` is a QThread parented to MainWindow with no `closeEvent`; teardown destroys it while running → Qt qFatal 'QThread destroyed while running'. Fix: add `MainWindow.closeEvent` that `terminate()`+`wait()`s `_update_download` if `isRunning()` (blocking urllib SSL read ignores `requestInterruption`).
+- **0.5.1 updater UX (HIGH)**: download shows only a toast, no progress — 171 MB `.dmg` looks frozen, user quits → crash above. Fix: add download progress dialog + Cancel in `_start_update_download`.
 - **0.4.0 distribute manually**: hand 0.4.0+ full installers to existing 0.2/0.3 users — they have no update checker.
 - **Delta-over-the-wire (0.6.0+)**: wire client-side `tier="delta"` in `UpdateDownloadThread`/`download_and_verify` before a delta can ship online. Build-level delta detection already works; still ships FULL because client always requests full.
 - Exercise CI workflow (`.github/workflows/release.yml`) end-to-end on a pushed `v*` tag.
