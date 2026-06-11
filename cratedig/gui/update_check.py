@@ -40,16 +40,29 @@ class UpdateDownloadThread(QThread):
 
     done = Signal(str)  # verified installer path
     failed = Signal(str)
+    progress = Signal(int, int)  # (bytes_done, bytes_total); total=0 if unknown
 
     def __init__(self, release, parent=None) -> None:
         super().__init__(parent)
         self._release = release
+        self._cancelled = False
+
+    def cancel(self) -> None:
+        """Request abort; the download loop polls this between chunks."""
+        self._cancelled = True
 
     def run(self) -> None:  # noqa: D401 - QThread entry point
         try:
             dest = tempfile.mkdtemp(prefix="cratedig-update-dl-")
-            path = updater.download_and_verify(self._release, dest)
+            path = updater.download_and_verify(
+                self._release,
+                dest,
+                progress=lambda d, t: self.progress.emit(d, t),
+                cancel=lambda: self._cancelled,
+            )
         except updater.UpdateError as exc:
+            if self._cancelled:
+                return  # user-initiated abort — stay silent
             self.failed.emit(str(exc))
             return
         self.done.emit(str(path))

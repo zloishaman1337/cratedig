@@ -49,9 +49,9 @@ from .settings_dialog import SettingsDialog
 from .settings_tabs import _keys
 from .toast import ToastManager
 from .theme import ACCENT, app_icon, icon
-from .project_explorer import ProjectExplorerPanel
 from ..projects_fmt.bitwig import parse_bwproject
 from ..projects_fmt.nuendo import parse_npr
+from ..projects_fmt.common import to_checker_data
 from .tag_editor import TagEditor
 from .tree_pane import TreePane
 from .simpler_pane import SimplerPane
@@ -273,11 +273,23 @@ class MainWindow(QMainWindow):
         # --- stacked pages: 0 samples · 1 Ableton · 2 Health · 3 Bitwig · 4 Nuendo ---
         self._als_panel = AlsExplorerPanel()
         self._health_panel = HealthPanel()
-        self._bitwig_panel = ProjectExplorerPanel(
-            parse_bwproject, "Bitwig Project Checker", "Bitwig project (*.bwproject)"
+        # Bitwig/Nuendo reuse the full Ableton checker panel (identical GUI + features):
+        # a parser + a normalizer adapt their flatter data into the rich schema.
+        self._bitwig_panel = AlsExplorerPanel(
+            parser=parse_bwproject,
+            normalizer=to_checker_data,
+            title="Bitwig Project Checker",
+            file_exts=(".bwproject",),
+            file_filter="Bitwig project (*.bwproject)",
+            bare_is_native=True,
         )
-        self._nuendo_panel = ProjectExplorerPanel(
-            parse_npr, "Nuendo / Cubase Project Checker", "Nuendo/Cubase project (*.npr *.cpr)"
+        self._nuendo_panel = AlsExplorerPanel(
+            parser=parse_npr,
+            normalizer=to_checker_data,
+            title="Nuendo / Cubase Project Checker",
+            file_exts=(".npr", ".cpr"),
+            file_filter="Nuendo/Cubase project (*.npr *.cpr)",
+            bare_is_native=False,  # .npr plugin names carry no format → not disk-checkable
         )
         self._pages = QStackedWidget()
         self._pages.setObjectName("PageSurface")
@@ -420,7 +432,14 @@ class MainWindow(QMainWindow):
         self._worker.pluginIndexReady.connect(self._bitwig_panel.set_plugin_index)
         self._worker.pluginIndexReady.connect(self._nuendo_panel.set_plugin_index)
 
-        self._als_panel.matchRequested.connect(self._on_als_match_requested)
+        # All three checker panels share the library-match flow; a per-request seq
+        # routes each result back to the panel that asked for it.
+        self._match_panels: dict[int, object] = {}
+        self._match_wired: set = set()
+        for _panel in (self._als_panel, self._bitwig_panel, self._nuendo_panel):
+            _panel.matchRequested.connect(
+                lambda names, p=_panel: self._on_panel_match_requested(p, names)
+            )
         self._als_match_requested.connect(
             self._worker.request_als_match, Qt.ConnectionType.QueuedConnection
         )
@@ -721,14 +740,38 @@ class MainWindow(QMainWindow):
             self._on_update_available(self._pending_update_release)
 
     def _start_update_download(self, release) -> None:
+        from PySide6.QtWidgets import QProgressDialog
+
         from .update_check import UpdateDownloadThread
 
-        self._toasts.show(f"Downloading update {release.version}…", "info")
         self._update_download = UpdateDownloadThread(release, self)
+
+        dlg = QProgressDialog(
+            f"Downloading update {release.version}…", "Cancel", 0, 0, self
+        )
+        dlg.setWindowTitle("Updating")
+        dlg.setWindowModality(Qt.WindowModality.WindowModal)
+        dlg.setMinimumDuration(0)
+        dlg.setAutoClose(False)
+        dlg.setAutoReset(False)
+        dlg.setValue(0)
+        self._update_progress_dialog = dlg
+
+        def _on_progress(done: int, total: int) -> None:
+            if total > 0:
+                dlg.setMaximum(total)
+                dlg.setValue(done)
+            else:
+                dlg.setMaximum(0)  # indeterminate until the size is known
+
+        self._update_download.progress.connect(_on_progress)
+        self._update_download.done.connect(dlg.close)
         self._update_download.done.connect(self._on_update_downloaded)
+        self._update_download.failed.connect(dlg.close)
         self._update_download.failed.connect(
             lambda msg: self._toasts.show(f"Update failed: {msg}", "error")
         )
+        dlg.canceled.connect(self._update_download.cancel)
         self._update_download.start()
 
     def _on_update_downloaded(self, installer_path: str) -> None:
@@ -1284,23 +1327,25 @@ class MainWindow(QMainWindow):
         super().resizeEvent(event)
         self._toasts.reposition()
 
-    def _on_als_match_requested(self, names) -> None:
+    def _on_panel_match_requested(self, panel, names) -> None:
         self._als_match_seq += 1
+        self._match_panels[self._als_match_seq] = panel
         self._als_match_requested.emit(self._als_match_seq, names)
 
     def _on_plugin_scan_requested(self, force: bool) -> None:
         self._plugin_scan_requested.emit(list(self._cfg.plugins.scan_dirs), force)
 
     def _on_als_match_ready(self, seq: int, result: dict) -> None:
-        if seq != self._als_match_seq:
+        panel = self._match_panels.pop(seq, None)
+        if panel is None:
             return
-        if not getattr(self, "_als_match_actions_wired", False):
-            self._als_panel.reveal_requested.connect(self._reveal_path)
-            self._als_panel.add_to_crate_requested.connect(self._on_add_to_crate)
-            self._als_panel.create_crate_requested.connect(self._on_create_crate)
-            self._als_match_actions_wired = True
-        self._als_panel.set_crates(self._crates)
-        self._als_panel.set_match_result(result)
+        if panel not in self._match_wired:
+            panel.reveal_requested.connect(self._reveal_path)
+            panel.add_to_crate_requested.connect(self._on_add_to_crate)
+            panel.create_crate_requested.connect(self._on_create_crate)
+            self._match_wired.add(panel)
+        panel.set_crates(self._crates)
+        panel.set_match_result(result)
 
     def closeEvent(self, event) -> None:
         # Persist window geometry and splitter state
@@ -1312,6 +1357,17 @@ class MainWindow(QMainWindow):
         # Persist column state
         self._sample_table.save_column_state()
         self._player.stop()
+        # Abort an in-flight update download before teardown — destroying a running
+        # QThread triggers a Qt qFatal ('QThread destroyed while running').
+        dl = getattr(self, "_update_download", None)
+        if dl is not None and dl.isRunning():
+            dl.cancel()
+            if not dl.wait(3000):
+                dl.terminate()
+                dl.wait(2000)
+        chk = getattr(self, "_update_check", None)
+        if chk is not None and chk.isRunning():
+            chk.wait(2000)
         self._thread.quit()
         self._thread.wait(3000)
         super().closeEvent(event)

@@ -307,13 +307,31 @@ def download_asset(
     *,
     timeout: float = 120.0,
     opener=urllib.request.urlopen,
+    progress=None,
+    cancel=None,
 ) -> Path:
-    """Stream a release asset into ``dest_dir``; verify the byte size; return path."""
+    """Stream a release asset into ``dest_dir``; verify the byte size; return path.
+
+    ``progress(done, total)`` is called after each chunk (``total`` = ``asset.size``,
+    0 when unknown). ``cancel()`` is polled before each chunk; if it returns truthy
+    the download aborts with :class:`UpdateError`.
+    """
     dest = Path(dest_dir) / asset.name
     req = urllib.request.Request(asset.download_url, headers=_HTTP_HEADERS)
+    total = asset.size or 0
+    done = 0
     try:
         with opener(req, timeout=timeout) as resp, open(dest, "wb") as fh:
-            shutil.copyfileobj(resp, fh, length=1 << 20)
+            while True:
+                if cancel is not None and cancel():
+                    raise UpdateError(f"download of {asset.name} cancelled")
+                chunk = resp.read(1 << 20)
+                if not chunk:
+                    break
+                fh.write(chunk)
+                done += len(chunk)
+                if progress is not None:
+                    progress(done, total)
     except (urllib.error.URLError, OSError, TimeoutError) as exc:
         raise UpdateError(f"could not download {asset.name}: {exc}") from exc
     if asset.size and dest.stat().st_size != asset.size:
@@ -374,15 +392,19 @@ def download_and_verify(
     *,
     os_name: str | None = None,
     tier: str = "full",
+    progress=None,
+    cancel=None,
 ) -> Path:
     """Download the OS asset + its ``.minisig``, verify the signature, return the
     asset path. Combines :func:`select_asset`, :func:`download_asset` and
-    :func:`verify_signature` — the full trusted-download path."""
+    :func:`verify_signature` — the full trusted-download path. ``progress``/``cancel``
+    are forwarded to the (large) asset download; the tiny ``.minisig`` only honours
+    ``cancel``."""
     target_os = os_name or current_os()
     asset = select_asset(release, target_os, tier)
     sig = find_signature(release, asset)
-    asset_path = download_asset(asset, dest_dir)
-    sig_path = download_asset(sig, dest_dir)
+    asset_path = download_asset(asset, dest_dir, progress=progress, cancel=cancel)
+    sig_path = download_asset(sig, dest_dir, cancel=cancel)
     verify_signature(asset_path, sig_path)
     return asset_path
 

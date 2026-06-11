@@ -48,6 +48,54 @@ def extract_sample_basenames(data: bytes) -> list[str]:
     return sorted(found, key=str.lower)
 
 
+def resolve_samples_on_disk(
+    basenames: list[str], project_path: str | Path, *, max_files: int = 20_000
+) -> dict:
+    """Split ``basenames`` into found/missing by scanning the project's directory.
+
+    The binary parsers recover only sample *basenames* (no reliable absolute path),
+    so existence is checked against the files living next to the project file
+    (recursively, bounded by ``max_files`` to keep a hostile/huge tree cheap).
+    Returns ``{"found": [...], "missing": [...]}`` in the input order.
+    """
+    base = Path(project_path).resolve().parent
+    present: set[str] = set()
+    if base.is_dir():
+        seen = 0
+        for p in base.rglob("*"):
+            seen += 1
+            if seen > max_files:
+                break
+            if p.is_file():
+                present.add(p.name.lower())
+    found = [n for n in basenames if n.lower() in present]
+    missing = [n for n in basenames if n.lower() not in present]
+    return {"found": found, "missing": missing}
+
+
+def to_checker_data(data: dict, project_path: str | Path) -> dict:
+    """Adapt a binary-parser result to the rich schema the project-checker panel uses.
+
+    Binary formats (Bitwig/Nuendo) yield a flat ``{version, plugins, samples, tracks}``;
+    the panel (shared with the Ableton checker) expects ``main``/``arrangement``/
+    ``tracks``/``samples{found,missing}``. Plugins are hung on one synthetic "Project"
+    track so they surface in the Plugins tab; fader/arrangement are unavailable here.
+    """
+    plugins = list(data.get("plugins", []))
+    tracks: list[dict] = []
+    if plugins:
+        tracks = [{"name": "Project", "type": "audio", "instruments": [], "plugins": plugins}]
+    version = data.get("version", "")
+    return {
+        "ableton_version": version,
+        "version": version,
+        "main": {"fader_db": None, "fader_above_0db": False, "plugins": [], "instruments": []},
+        "arrangement": None,
+        "tracks": tracks,
+        "samples": resolve_samples_on_disk(list(data.get("samples", [])), project_path),
+    }
+
+
 def read_be_string(data: bytes, pos: int) -> tuple[str, int] | None:
     """Read a 4-byte big-endian length-prefixed UTF-8 string at ``pos``.
 

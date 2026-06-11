@@ -226,6 +226,59 @@ def test_download_asset_size_mismatch_raises(tmp_path):
         updater.download_asset(asset, tmp_path, opener=opener)
 
 
+def test_download_asset_reports_progress(tmp_path):
+    body = b"x" * (3 * (1 << 20) + 7)  # 3 full 1 MiB chunks + a remainder
+    asset = updater.ReleaseAsset(name="a.bin", download_url="http://h/a", size=len(body))
+
+    def opener(req, timeout=None):
+        return _fake_response(body)
+
+    calls: list[tuple[int, int]] = []
+    out = updater.download_asset(
+        asset, tmp_path, opener=opener, progress=lambda d, t: calls.append((d, t))
+    )
+    assert out.read_bytes() == body
+    assert calls, "progress callback was never invoked"
+    assert calls[-1] == (len(body), len(body))
+    assert all(t == len(body) for _, t in calls)
+    assert [d for d, _ in calls] == sorted(d for d, _ in calls)  # monotonic
+
+
+def test_download_asset_cancel_aborts(tmp_path):
+    body = b"x" * (4 << 20)
+    asset = updater.ReleaseAsset(name="a.bin", download_url="http://h/a", size=len(body))
+
+    def opener(req, timeout=None):
+        return _fake_response(body)
+
+    with pytest.raises(updater.UpdateError):
+        updater.download_asset(asset, tmp_path, opener=opener, cancel=lambda: True)
+
+
+def test_download_and_verify_forwards_progress_and_cancel(monkeypatch, tmp_path):
+    rel = updater.parse_release(_api_doc())
+    monkeypatch.setattr(updater, "minisign_path", lambda: "minisign")
+    seen: list[dict] = []
+
+    def fake_download(asset, dest_dir, **kw):
+        seen.append(kw)
+        p = tmp_path / asset.name
+        p.write_bytes(b"payload")
+        return p
+
+    monkeypatch.setattr(updater, "download_asset", fake_download)
+    monkeypatch.setattr(updater, "verify_signature", lambda *a, **k: None)
+
+    prog = lambda d, t: None
+    cancel = lambda: False
+    updater.download_and_verify(
+        rel, tmp_path, os_name="win", tier="full", progress=prog, cancel=cancel
+    )
+    # The large asset download must receive both callbacks.
+    assert seen[0].get("progress") is prog
+    assert seen[0].get("cancel") is cancel
+
+
 class _Proc:
     def __init__(self, rc, err=""):
         self.returncode = rc

@@ -58,13 +58,13 @@ _LANG: str = "ru"
 
 _STRINGS: dict[str, dict[str, str]] = {
     "ru": {
-        "btn_open":            "Открыть .als файл",
+        "btn_open":            "Открыть проект",
         "no_file":             "Файл не выбран",
-        "placeholder":         "Перетащите .als файл сюда\nили нажмите «Открыть .als файл»",
-        "dialog_title":        "Выберите файл Ableton Live",
+        "placeholder":         "Перетащите файл проекта сюда\nили нажмите «Открыть проект»",
+        "dialog_title":        "Выберите файл проекта",
         "dialog_all_files":    "Все файлы",
         "warn_invalid_title":  "Неверный файл",
-        "warn_invalid_msg":    "Пожалуйста, перетащите файл .als",
+        "warn_invalid_msg":    "Пожалуйста, перетащите подходящий файл проекта",
         "err_title":           "Ошибка",
         "tab_instruments":     "Инструменты",
         "tab_plugins":         "Плагины",
@@ -80,13 +80,13 @@ _STRINGS: dict[str, dict[str, str]] = {
         "empty_list":          "Нет",
     },
     "en": {
-        "btn_open":            "Open .als file",
+        "btn_open":            "Open project",
         "no_file":             "No file selected",
-        "placeholder":         "Drag .als file here\nor click \"Open .als file\"",
-        "dialog_title":        "Select Ableton Live file",
+        "placeholder":         "Drag a project file here\nor click \"Open project\"",
+        "dialog_title":        "Select project file",
         "dialog_all_files":    "All files",
         "warn_invalid_title":  "Invalid file",
-        "warn_invalid_msg":    "Please drop an .als file",
+        "warn_invalid_msg":    "Please drop a valid project file",
         "err_title":           "Error",
         "tab_instruments":     "Instruments",
         "tab_plugins":         "Plugins",
@@ -255,9 +255,26 @@ class AlsExplorerPanel(QWidget):
     add_to_crate_requested = Signal(object, int)
     create_crate_requested = Signal(object)
 
-    def __init__(self, parent: QWidget | None = None) -> None:
+    def __init__(
+        self,
+        parent: QWidget | None = None,
+        *,
+        parser=parse_als,
+        normalizer=None,
+        title: str = "Ableton Project Checker",
+        file_exts: tuple[str, ...] = (".als",),
+        file_filter: str = "Ableton Live Set (*.als)",
+        bare_is_native: bool = True,
+    ) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
+
+        self._parser = parser
+        self._normalizer = normalizer
+        self._title = title
+        self._file_exts = tuple(e.lower() for e in file_exts)
+        self._file_filter = file_filter
+        self._bare_is_native = bare_is_native
 
         self._data: dict | None = None
         self._match_seq = 0
@@ -305,18 +322,22 @@ class AlsExplorerPanel(QWidget):
             self._render(self._data)
 
     @staticmethod
-    def _plugin_badge(dev_name: str, index) -> tuple[str, str] | None:
+    def _plugin_badge(dev_name: str, index, bare_is_native: bool = True) -> tuple[str, str] | None:
         """Return (glyph, color) for an installed ✓ / missing ✗ badge, or None.
 
         Native Live devices (no format suffix) ship with Live → ✓. Max for Live
         devices can't be disk-checked → neutral "M4L". 3rd-party VST/AU/AAX rows
         get a real check once an index is available (None = scan pending).
+
+        ``bare_is_native`` controls suffix-less names: True (Ableton/Bitwig, where a
+        bare name is a bundled native device) → ✓; False (Nuendo/Cubase, where the
+        format is unknown and can't be disk-checked) → no badge.
         """
         name = dev_name.strip()
         if name.endswith("[M4L]"):
             return ("M4L", C_M4L)
         if not any(name.endswith(s) for s in _THIRD_PARTY_SUFFIXES):
-            return ("✓", C_OK)  # native Live device
+            return ("✓", C_OK) if bare_is_native else None
         if index is None:
             return None  # scan pending
         clean = name.rsplit(" [", 1)[0].strip()
@@ -335,7 +356,7 @@ class AlsExplorerPanel(QWidget):
         header_layout.setContentsMargins(16, 8, 12, 8)
         header_layout.setSpacing(8)
 
-        title_lbl = _colored_label("Ableton Project Checker", C_HEADER, bold=True, font_size=16)
+        title_lbl = _colored_label(self._title, C_HEADER, bold=True, font_size=16)
         header_layout.addWidget(title_lbl)
         header_layout.addStretch()
 
@@ -469,7 +490,7 @@ class AlsExplorerPanel(QWidget):
         if not urls:
             return
         path = urls[0].toLocalFile()
-        if not path.lower().endswith(".als"):
+        if not path.lower().endswith(self._file_exts):
             QMessageBox.warning(self, T("warn_invalid_title"), T("warn_invalid_msg"))
             return
         self._load_file(path)
@@ -481,21 +502,23 @@ class AlsExplorerPanel(QWidget):
             self,
             T("dialog_title"),
             "",
-            f"Ableton Live Set (*.als);;{T('dialog_all_files')} (*.*)",
+            f"{self._file_filter};;{T('dialog_all_files')} (*.*)",
         )
         if path:
             self._load_file(path)
 
     def _load_file(self, path: str) -> None:
         try:
-            data = parse_als(path)
+            data = self._parser(path)
+            if self._normalizer is not None:
+                data = self._normalizer(data, path)
         except Exception as exc:
             QMessageBox.critical(self, T("err_title"), str(exc))
             return
         self._data = data
         self._lbl_file.setText(os.path.basename(path))
         self._lbl_file.setStyleSheet(f"color: {C_VALUE}; background: transparent;")
-        self._lbl_version.setText(data["ableton_version"])
+        self._lbl_version.setText(data.get("ableton_version") or data.get("version", ""))
         self._btn_match.setEnabled(True)
         self._render(data)
         # Request a cached installed-plugin scan to populate badges (no-op if no
@@ -750,7 +773,7 @@ class AlsExplorerPanel(QWidget):
                 row_layout.addWidget(dev_lbl)
 
                 if mode in ("plugins", "instruments"):
-                    badge = self._plugin_badge(dev_name, self._plugin_index)
+                    badge = self._plugin_badge(dev_name, self._plugin_index, self._bare_is_native)
                     if badge is not None:
                         glyph, col = badge
                         badge_lbl = _colored_label(glyph, col, bold=True, font_size=12)

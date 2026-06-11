@@ -13,7 +13,12 @@ param(
     # Sign the installer with minisign (requires $env:MINISIGN_PASSWORD + minisign.key in repo root).
     [switch]$Sign,
     # Publish the signed assets to GitHub Releases via `gh` (implies -Sign).
-    [switch]$Publish
+    [switch]$Publish,
+    # Tier override: "auto" diffs the manifest (default); "full"/"delta" force it.
+    # The online client still always fetches the FULL asset, so releases that must
+    # auto-update existing installs have to ship "full" until delta-over-the-wire lands.
+    [ValidateSet("auto", "full", "delta")]
+    [string]$Tier = "auto"
 )
 
 $ErrorActionPreference = "Stop"
@@ -88,6 +93,10 @@ if ($prev) {
     $diff = & $py packaging\make_manifest.py diff $prev.FullName $newManifest
     $diff | ForEach-Object { Write-Host "    $_" }
     if ($diff -match 'tier=delta') { $tier = "delta" }
+}
+if ($Tier -ne "auto") {
+    Write-Host "==> Tier override: auto=$tier -> $Tier"
+    $tier = $Tier
 }
 
 if ($tier -eq "delta") {
