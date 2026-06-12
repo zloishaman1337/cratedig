@@ -1,7 +1,15 @@
 # PLAN — cratedig 0.5.2 (implementation blueprint)
 
-> **Status:** PLANNING ONLY — no code written. Next implementing `/update` session:
-> say «делаем 0.5.2» and execute the phases below in order.
+> **Status: IMPLEMENTED — shipped in 0.5.2 (Session 1 «Change + Windows», 2026-06-12).**
+> All six explorers (Reaper, FL Studio, Studio One, Cubase dedicated page, Logic Pro,
+> Pro Tools) + the `main_window` refactor are live. Windows installer published and
+> signed. macOS build PENDING (see COMPACT.md macOS HANDOFF block).
+> The blueprint below is preserved for reference.
+
+---
+
+> ~~**Status:** PLANNING ONLY — no code written. Next implementing `/update` session:~~
+> ~~say «делаем 0.5.2» and execute the phases below in order.~~
 > **Version target:** `0.5.1` → **`0.5.2`** (minor — user-visible features). Bump
 > `pyproject.toml` + `cratedig/__init__.__version__` together, ONCE, in the
 > implementation session (UPDATE_RULES §2). Shipped-surface IS touched → full

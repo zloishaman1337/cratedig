@@ -39,15 +39,15 @@ sessions skip the release stage entirely.
 | search.query | ✅ | parameterized SQL filters incl. category |
 | tui | ✅ | collapsible Tree; breadcrumb+DataTable per folder; `b` fav; `u` duplicates |
 | gui | ✅ | Global dark redesign; all subsystems wired |
-| gui.main_window | ✅ | 5 stacked sidebar pages (index 3=Bitwig, 4=Nuendo); version label in QStatusBar; `_maybe_check_updates()` silent startup check; unified download+install both OS; `closeEvent` aborts in-flight `_update_download`+`_update_check` before thread quit (0.5.1); match-request wiring via `self._match_panels`/`self._match_wired` (N panels, 0.5.1) |
+| gui.main_window | ✅ | **0.5.2**: 11 stacked pages (0 samples · 1 Ableton · 2 Health · 3-10 DAW checkers); `self._checker_panels` list (als + `self._daw_panels`); `self._daw_panels` spec-driven (8 panels: Bitwig, Nuendo, Cubase, Reaper, FL Studio, Studio One, Logic, Pro Tools); all worker wiring loops iterate `self._checker_panels`; version label in QStatusBar; `_maybe_check_updates()` silent startup check; unified download+install both OS; `closeEvent` aborts in-flight threads |
 | gui.simpler_pane | ✅ | **0.5.0**: `_WaveCanvas.paintEvent` blits cached static QPixmap (`_paint_static`); playhead drawn live only; mip peak pyramid for envelope; cache invalidated by version counters |
-| gui.als_explorer | ✅ | **0.5.1**: `AlsExplorerPanel` is now GENERIC — constructor params `parser`/`normalizer`/`title`/`file_exts`/`file_filter`/`bare_is_native`; Bitwig (index 3) + Nuendo/Cubase (index 4) ARE `AlsExplorerPanel` instances; `_plugin_badge` takes 3rd `bare_is_native` arg (False = unknown format → no badge). `gui/project_explorer.py` DELETED (superseded). |
+| gui.als_explorer | ✅ | **0.5.2**: generic `AlsExplorerPanel`; 4 tabs (Overview/Instruments/Plugins/Tracks); summary card shows Tempo/Key/Length/3rd-party; NEW Project Health card (`_compute_health` score 0-100 + issues); NEW Overview tab (`_build_overview_tab`); `_plugin_badge` takes `bare_is_native` arg. i18n keys RU+EN for all new UI. `C_WARN` color added. `gui/project_explorer.py` DELETED. |
 | gui.update_check | ✅ | `UpdateCheckThread` (silent startup check) + `UpdateDownloadThread` (streams + minisign-verifies); **0.5.1**: `progress = Signal(int,int)` + `cancel()` flag; stays silent on user-initiated cancel |
 | gui.worker | ✅ | `request_reload()` uses `tags_for_all()` (batched); `request_plugin_scan` slot + `pluginIndexReady` signal (0.5.0) |
 | updater | ✅ | **ONLINE updater**. `FileEntry`/`UpdateManifest`/`ReleaseAsset`/`Release`, `sha256_file`, `manifest_sha256`, `build_update_zip_doc`, `load_update_manifest`, `is_newer`, `verify_payload`, `current_os`, `parse_release`, `select_asset`, `find_signature`. I/O: `fetch_latest_release`, `download_asset` (0.5.1: 1 MiB chunk streaming, optional `progress(done,total)` + `cancel()` poll), `minisign_path`, `verify_signature`, `download_and_verify` (forwards `progress`/`cancel`). macOS apply: `apply_update` (delta `.zip`), `apply_dmg_update` + `_write_dmg_restart_helper`. `GITHUB_REPO="zloishaman1337/cratedig"` hardcoded. `MINISIGN_PUBKEY` embedded (key id 54F217219B866BE6). |
 | als (parser) | ✅ | stdlib-only; `parse_als(path)→dict`; AU/VST2/VST3/M4L; `_match_plugin` delegates to `scanner.match_name` (0.5.0) |
 | plugins.scanner | ✅ | **NEW 0.5.0** `cratedig/plugins/scanner.py`: `standard_plugin_dirs`, `scan_installed`, `match_name`/`match_installed`, `load_or_scan`; disk cache at `user_data_dir()/plugin_index.json` keyed by dir signature |
-| projects_fmt | ✅ | **NEW 0.5.0** `cratedig/projects_fmt/`: `common.py` (`read_project_bytes`, MAX_PROJECT_BYTES=256MB, `_AUDIO_RE` bounded, **0.5.1**: `resolve_samples_on_disk` + `to_checker_data`), `bitwig.py`, `nuendo.py`. Returns `{format, version, plugins, samples, tracks}`. Security hardened. |
+| projects_fmt | ✅ | **0.5.2**: `common.py` carries `bpm`/`length`/`key`; `to_checker_data` passes rich tracks through (non-empty list-of-dicts wins over synthetic "Project" track); `_arrangement_from` synthesises arrangement from bpm/length; `iter_printable_runs` helper; `resolve_samples_on_disk` scans bundle DIR directly (Logic). `bitwig.py` `_tempo` via 0x07-tagged BE double near TEMPO (bpm 140 verified). `nuendo.py` `_tempo` via BE float near MTempoTrackEvent (bpm 120 verified). NEW: `reaper.py` (full parity: rich tracks/tempo/VST/AU/CLAP/JS/FILE samples), `flstudio.py` (FLhd/FLdt walk: version/tempo/samples/generators/effects/wrapped-VST), `studioone.py` (ZIP classInfo device nodes; tempo→None; zip-bomb caps), `logic.py` (macOS bundle dir; MetaData.plist→bpm/key/tracks/AudioFiles; ProjectInformation.plist→version; 3rd-party AU via reversed 4cc markers; names truncated to 11 chars in source data), `protools.py` (best-effort ONLY: body XOR-obfuscated; returns version + plaintext sample refs, never cipher garbage). |
 | sources.* | ✅ | youtube/yandex/freesound/manager; `safe_filename`+`unique_path`; `ffmpeg_location` yt-dlp opt from `bundled_binary` when frozen |
 | metadata (mb/discogs) | ✅ | incremental `metadata_cache`; `rank_track_hits(..., force_live=False)` |
 
@@ -60,11 +60,11 @@ sessions skip the release stage entirely.
 ## Packaging status
 | target | status | note |
 |---|---|---|
-| Windows onedir build | ✅ DONE 0.5.1 | `dist/cratedig/`; smoke-launched alive 8s clean stop |
-| Windows installer | ✅ DONE 0.5.1 | `cratedig-setup-0.5.1.exe` signed; tier=FULL; delta removed from release |
-| Release manifests | ✅ win+mac 0.5.1 | `cratedig-0.5.1-win.json` + `cratedig-0.5.1-mac.json` committed (db1d7c3) |
-| Windows GitHub release | ✅ published 0.5.1 (signed) | `cratedig-setup-0.5.1.exe` + `.minisig` verified; https://github.com/zloishaman1337/cratedig/releases/tag/0.5.1 |
-| macOS `.app` + `.dmg` | ✅ DONE 0.5.1 | signed (minisign verified), published to 0.5.1 release, smoke ok |
+| Windows onedir build | ✅ DONE 0.5.2 | `dist/cratedig/`; smoke-launched alive 8s clean stop |
+| Windows installer | ✅ DONE 0.5.2 | `cratedig-setup-0.5.2.exe` signed; tier=FULL (delta removed from release) |
+| Release manifests | ✅ win 0.5.2 | `cratedig-0.5.2-win.json` committed (808 files); mac pending |
+| Windows GitHub release | ✅ published 0.5.2 (signed) | `cratedig-setup-0.5.2.exe` + `.minisig` verified; https://github.com/zloishaman1337/cratedig/releases/tag/0.5.2 |
+| macOS `.app` + `.dmg` | ⏳ PENDING 0.5.2 | see macOS HANDOFF block below |
 | GitHub Actions CI | ⏳ written, not run | `.github/workflows/release.yml` matrix; fires on tag |
 
 ## Gotchas
@@ -95,16 +95,27 @@ sessions skip the release stage entirely.
 - **`build_all.ps1 -Tier full` arg can mis-bind through `pwsh -File`** — verify the "Done (tier)" line after the build; if it says delta, build the full installer directly via ISCC on `cratedig.iss` from the existing onedir, sign, and swap the release asset.
 - **0.4.1→0.5.0 auto-update was broken** (crash + no progress) — fixed in 0.5.1. Auto-update only reliable from 0.5.1+. Distribute 0.5.0+ full installers manually to pre-0.5.1 users.
 - **Pre-existing test failure**: `test_config_writer.py::test_round_trip_no_mutation_preserves_bytes` fails due to CRLF/LF mismatch in `config.example.toml` working tree — not a regression, unrelated to any feature work.
+- **Large DAW test fixtures** (`projects/` — Logic ~82MB, Studio One ~75MB, Cubase ~11MB, flp/ptx/rpp) intentionally LEFT UNTRACKED; real-project tests are `skipif`-guarded on their presence. Original fixtures (`Changes.npr`, `Surface Tension.bwproject`) remain tracked.
+- **Logic AU plugin names truncated to 11 chars** in `ProjectData` reversed-4cc markers — this is inherent to the source data, not a parser bug.
+- **onedir code-only release → auto-tier picks DELTA** (only `cratedig.exe`+`base_library.zip` change); but client still fetches FULL — always build full via ISCC on `cratedig.iss`, sign, delete delta assets from the release.
 
-## Verification (0.5.1)
-- Full pytest: **927 passed, 1 failed** (pre-existing CRLF artifact, see Gotchas — not a 0.5.1 regression).
-- New test files: `tests/test_project_checker.py` (`to_checker_data` + `resolve_samples_on_disk` + reused-panel parity + badge semantics); 4 new updater tests (progress/cancel/forwarding). Removed `tests/test_project_explorer.py`.
-- Frozen `dist\cratedig\cratedig.exe` (0.5.1) smoke-launched — alive 8s, clean stop.
-- `cratedig-setup-0.5.1.exe` minisign VERIFIED ("Signature and comment signature verified", trusted comment "cratedig 0.5.1").
-- Live feed: `fetch_latest_release()`→0.5.1; `is_newer(0.5.1,0.5.0)`=True; `select_asset(win,full)`→cratedig-setup-0.5.1.exe.
-- `cratedig-0.5.1.dmg` minisign VERIFIED ("Signature and comment signature verified", trusted comment "cratedig 0.5.1"); .app smoke-launched alive 8s, clean stop; tier=FULL.
+## Verification (0.5.2)
+- Full pytest: **955 passed, 1 failed** (pre-existing CRLF artifact — not a regression).
+- +28 new tests vs 0.5.1 (927→955). New test files: `tests/test_projects_fmt_reaper.py`, `_flstudio.py`, `_studioone.py`, `_logic.py`, `_protools.py`. Extended: `test_projects_fmt.py` (bitwig/nuendo bpm), `test_project_checker.py` (bpm/length/key carry, rich-tracks passthrough, Project Health), `test_als.py` (4 tabs; 11 stacked pages + per-DAW nav).
+- Frozen `dist\cratedig\cratedig.exe` (0.5.2) smoke-launched — alive 8s, clean stop.
+- `cratedig-setup-0.5.2.exe` minisign VERIFIED (trusted comment "cratedig 0.5.2").
+- Live feed: `fetch_latest_release()`→0.5.2; `is_newer(0.5.2,0.5.1)`=True; `select_asset(win,full)`→cratedig-setup-0.5.2.exe.
 
-## macOS HANDOFF — none
+## macOS HANDOFF — PENDING
+- version: 0.5.2
+- tier: full   # client still fetches the full asset; macOS diff is authoritative (§3)
+- windows update: DONE (cratedig-setup-0.5.2.exe, signed+published)
+- macos update: PENDING
+- source ref: 6b3b147 (branch main)
+- changed files: see git show 6b3b147 — cratedig/projects_fmt/{common,bitwig,nuendo,reaper,flstudio,studioone,logic,protools}.py, cratedig/gui/{als_explorer,main_window}.py, tests, pyproject.toml, cratedig/__init__.py
+- new deps/assets: none (stdlib-only parsers; build_all.sh fetches nothing beyond ffmpeg/ffplay/minisign)
+- build command: bash packaging/macos/build_all.sh 0.5.2
+- notes: code-only change → macOS auto-tier will say delta; ship FULL .dmg anyway (same client-requests-full reason as Windows). After build: SIGN=1 PUBLISH=1 bash packaging/macos/build_all.sh 0.5.2, then if it produced a delta .zip swap it for the .dmg on the 0.5.2 release.
 
 ## Backlog
 - **0.4.0 distribute manually**: hand 0.4.0+ full installers to existing 0.2/0.3 users — they have no update checker.
@@ -128,4 +139,4 @@ sessions skip the release stage entirely.
 - `README.md` — end-user install guide
 - `README.dev.md` — developer setup guide
 - `docs/SETTINGS_DESIGN.md` — Settings dialog + config_writer blueprint
-- `docs/PLAN_0.5.2.md` — 0.5.2 feature blueprints (next milestone)
+- `docs/PLAN_0.5.2.md` — 0.5.2 feature blueprint (IMPLEMENTED — shipped in 0.5.2)
