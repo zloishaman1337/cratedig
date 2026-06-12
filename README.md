@@ -11,7 +11,7 @@ every sample, then lets you:
 - ⬇️ **Download** new audio from FreeSound, Yandex Music and YouTube straight into your library
 - 🎛️ **Slice and export** regions in a Simpler-style editor, then drag them into your DAW
 - 🎚️ **A/B compare** two samples with loudness matching
-- 🧩 **Inspect DAW projects** (Ableton, Bitwig, Cubase/Nuendo, Reaper, FL Studio, Studio One, Logic, Pro Tools) — see instruments, plugins, tracks, and match the project's samples against your library
+- 🧩 **Inspect DAW projects** (Ableton, Bitwig, Cubase/Nuendo, Reaper, FL Studio, Studio One, Logic, Pro Tools) — see instruments, plugins and tracks, flag plugins you don't have installed, and match the project's samples against your library
 - 🔁 **Convert projects** between formats (Reaper `.RPP`, Ableton `.als`, AAF)
 - 🩺 **Health dashboard** + **duplicate finder** to keep the library tidy
 
@@ -215,6 +215,10 @@ by name; use the tag and category filters to narrow down. Clicking or arrow-keyi
 through rows instantly **auditions** them; repeating the action starts/stops
 playback. Select one or more rows and **drag them straight out** into your DAW,
 Finder/Explorer, or any app that accepts files — the real sample files are dropped.
+Right-click a row for file management: **Rename**, **Move…**, **Delete** (to the
+trash, if enabled), **Reveal in Explorer/Finder**, plus crate and *Find similar*
+actions. A side **Metadata** panel shows the selected sample's scan/analyze results
+and embedded file tags (format, channels, length, BPM, key, …) at a glance.
 
 ### Find similar
 Select a sample and click **Find similar** — cratedig ranks the rest of the library
@@ -248,9 +252,10 @@ enriched with **MusicBrainz / Discogs** metadata for better naming and ranking.
 > [**Getting tokens**](#getting-tokens) section above.
 
 ### Simpler-style editor
-Load a sample into the editor panel to set a **region**, **fades**, an **ADSR**
-envelope, plus **reverse** and **loop** previews. Detect **transients** and
-**auto-slice**. **Export** the rendered region into the *Saved* folder
+Load a sample into the editor panel to set a **region** (one-click **trim silence**,
+**snap** the bounds to zero crossings, and **peak-normalize**), **fades**, an
+**ADSR** envelope, plus **reverse** and **loop** previews. Detect **transients** and **auto-slice**. **Export** the rendered
+region into the *Saved* folder
 (auto-indexed) or **drag the edited region straight out** into Ableton / your DAW:
 cratedig renders your current edit (region + fades + ADSR + reverse) to a fresh
 audio file on the fly and drops that, so what lands in the DAW is exactly what you
@@ -277,10 +282,14 @@ Drop a DAW project file onto cratedig (or open it via the toolbar) to see its
 **instruments, plugins and tracks**.
 The format is detected from the file: **Ableton** (`.als`), **Bitwig**, **Cubase/
 Nuendo**, **Reaper** (`.rpp`), **FL Studio** (`.flp`), **Studio One**, **Logic**
-and **Pro Tools** (`.ptx`). Plugins are recognized as AU/VST2/VST3/M4L. The
-**Library Match** view finds which of the project's samples already exist in your
-library — right-click to reveal in the file manager, add to a crate, or build a
-crate from them.
+and **Pro Tools** (`.ptx`). Plugins are recognized as AU/VST2/VST3/M4L, and
+cratedig checks each 3rd-party plugin against what's **actually installed on your
+machine** — so it flags devices the project needs but you don't have (use **Rescan
+plugins** to refresh that installed-plugin index). It also surfaces per-track detail
+like plugins on the Main bus and **silent/near-silent tracks**. The **Library
+Match** view finds which of the project's samples already exist in your library —
+right-click to reveal in the file manager, add to a crate, or build a crate from
+them. The Project Checker UI is available in **English and Russian** (EN/RU toggle).
 
 ### Convert projects
 From the Project Checker, click **Convert…** to export the loaded project to another
