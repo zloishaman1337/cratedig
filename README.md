@@ -89,7 +89,7 @@ Open **`cratedig-0.6.0.dmg`** and drag **cratedig** into **Applications**.
 > **About Xcode.** You **don't need Xcode** to run the prebuilt `.dmg` — it's an
 > already-compiled app, nothing to build. Xcode and the *Command Line Tools*
 > (`xcode-select --install`) are needed **only** if you choose to build cratedig
-> from source yourself (see `README.dev.md`).
+> from source yourself.
 
 ---
 
