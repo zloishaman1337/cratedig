@@ -213,7 +213,8 @@ A folder tree on the left, a sortable sample table on the right (filename, class
 category, BPM, key, sample rate, tags, duration). Type in the search box to filter
 by name; use the tag and category filters to narrow down. Clicking or arrow-keying
 through rows instantly **auditions** them; repeating the action starts/stops
-playback.
+playback. Select one or more rows and **drag them straight out** into your DAW,
+Finder/Explorer, or any app that accepts files — the real sample files are dropped.
 
 ### Find similar
 Select a sample and click **Find similar** — cratedig ranks the rest of the library
@@ -228,7 +229,9 @@ manual and auto tags are tracked separately.
 
 ### Crates and favorites
 Group samples into **crates** (right-click a row → *Add to crate / New crate*) and
-mark **favorites** with a star. Both show up as pinned branches in the tree.
+mark **favorites** with a star. Both show up as pinned branches in the tree. **Drag
+a crate** out of the tree to drop every sample it holds into your DAW or a folder
+in one gesture — handy for loading a whole curated set at once.
 
 ### Downloading new audio
 Open the **Download** panel, pick a mode and search:
@@ -248,14 +251,30 @@ enriched with **MusicBrainz / Discogs** metadata for better naming and ranking.
 Load a sample into the editor panel to set a **region**, **fades**, an **ADSR**
 envelope, plus **reverse** and **loop** previews. Detect **transients** and
 **auto-slice**. **Export** the rendered region into the *Saved* folder
-(auto-indexed) or **drag** it straight into Ableton / your DAW.
+(auto-indexed) or **drag the edited region straight out** into Ableton / your DAW:
+cratedig renders your current edit (region + fades + ADSR + reverse) to a fresh
+audio file on the fly and drops that, so what lands in the DAW is exactly what you
+shaped — not the untouched original.
 
 ### A/B compare
 Open two samples side by side and switch between them with **loudness matching**,
 so a volume difference doesn't bias your ears.
 
+### Drag & drop everywhere
+cratedig is built to feed your DAW without copy-paste detours:
+
+- **Drag samples out** — select rows in the table and drag the actual files into
+  Ableton, FL, Reaper, Finder/Explorer, or anything that takes a file.
+- **Drag a whole crate out** — grab a crate node in the tree and drop all of its
+  samples at once.
+- **Drag the edited region out** — from the Simpler-style editor, your live edit is
+  rendered to a new audio file and dropped, not the raw original.
+- **Drag a project in** — drop a DAW project file (`.als`, `.rpp`, `.flp`, `.ptx`,
+  …) onto the Project Checker to load and inspect it.
+
 ### Project Checker (multi-DAW)
-Drop a DAW project onto cratedig to see its **instruments, plugins and tracks**.
+Drop a DAW project file onto cratedig (or open it via the toolbar) to see its
+**instruments, plugins and tracks**.
 The format is detected from the file: **Ableton** (`.als`), **Bitwig**, **Cubase/
 Nuendo**, **Reaper** (`.rpp`), **FL Studio** (`.flp`), **Studio One**, **Logic**
 and **Pro Tools** (`.ptx`). Plugins are recognized as AU/VST2/VST3/M4L. The
