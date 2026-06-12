@@ -1,296 +1,308 @@
 # cratedig
 
-**cratedig** — десктопное приложение для копания в вашей библиотеке сэмплов, как
-*Sononym*, только локально и полностью ваше. Укажите ему свои папки — он
-проиндексирует каждый сэмпл и позволит:
+**cratedig** is a desktop app for digging through your sample library — like
+*Sononym*, but local and entirely yours. Point it at your folders and it indexes
+every sample, then lets you:
 
-- 🔎 **Искать** по имени, тегу, категории, BPM и тональности
-- 🎯 **Находить похожие** звуки по акустическому сходству на слух (а не просто по имени)
-- 🏷️ **Авто-тегировать и классифицировать** сэмплы (kick / snare / pad / «punchy» / «airy» …)
-- 🗂️ **Организовывать** в крейты (crates) и избранное
-- ⬇️ **Скачивать** новое аудио из FreeSound, Yandex Music и YouTube прямо в библиотеку
-- 🎛️ **Нарезать и экспортировать** регионы в редакторе в стиле Simpler, а затем перетаскивать их в DAW
-- 🎚️ **Сравнивать A/B** два сэмпла с выравниванием громкости
-- 🧩 **Исследовать проекты Ableton `.als`** — смотреть инструменты, плагины, треки и сопоставлять использованные сэмплы с вашей библиотекой
-- 🩺 **Дашборд здоровья** + **поиск дубликатов** для поддержания чистоты библиотеки
+- 🔎 **Search** by name, tag, category, BPM and key
+- 🎯 **Find similar** sounds by how they *sound* (acoustic similarity, not just the filename)
+- 🏷️ **Auto-tag and classify** samples (kick / snare / pad / "punchy" / "airy" …)
+- 🗂️ **Organize** into crates and favorites
+- ⬇️ **Download** new audio from FreeSound, Yandex Music and YouTube straight into your library
+- 🎛️ **Slice and export** regions in a Simpler-style editor, then drag them into your DAW
+- 🎚️ **A/B compare** two samples with loudness matching
+- 🧩 **Inspect DAW projects** (Ableton, Bitwig, Cubase/Nuendo, Reaper, FL Studio, Studio One, Logic, Pro Tools) — see instruments, plugins, tracks, and match the project's samples against your library
+- 🔁 **Convert projects** between formats (Reaper `.RPP`, Ableton `.als`, AAF)
+- 🩺 **Health dashboard** + **duplicate finder** to keep the library tidy
 
-Всё работает локально. Ваша библиотека, база данных и настройки остаются на вашем
-компьютере.
+Everything runs locally. Your library, database and settings stay on your machine.
 
 ---
 
-## Установка
+## Installation
 
 ### Windows
 
-1. Скачайте **`cratedig-setup-0.1.0.exe`**.
-2. Запустите. (Windows SmartScreen может предупредить, потому что установщик не
-   подписан сертификатом — нажмите **Подробнее → Выполнить в любом случае**.)
-3. Выберите папку установки, при желании отметьте **Создать ярлык на рабочем
-   столе**, завершите установку.
-4. Запустите **cratedig** из меню «Пуск» или с рабочего стола.
+1. Download **`cratedig-setup-0.6.0.exe`**.
+2. Run it. (Windows SmartScreen may warn because the installer isn't signed with
+   a certificate — click **More info → Run anyway**.)
+3. cratedig installs per-user (no admin/UAC needed). Optionally tick **Create a
+   desktop shortcut**, then finish.
+4. Launch **cratedig** from the Start menu or the desktop.
 
-ffmpeg/ffplay (нужны для воспроизведения, превью волны и YouTube) **встроены** в
-приложение — больше ничего ставить не нужно.
+ffmpeg/ffplay (needed for playback, waveform previews and YouTube) are **bundled**
+inside the app — nothing else to install.
 
-Чтобы удалить: *Параметры → Приложения* (или *Удалить cratedig* в меню «Пуск»).
-Ваша библиотека и настройки **сохраняются** (см. *Где хранятся ваши данные* ниже).
+To uninstall: *Settings → Apps* (or *Uninstall cratedig* in the Start menu). Your
+library and settings are **preserved** (see *Where your data lives* below).
 
 ### macOS
 
-> ⚠️ **Это неофициальное приложение для личного пользования.** Оно **не подписано**
-> сертификатом Apple Developer и **не нотаризовано**, поэтому Gatekeeper (защита
-> macOS) по умолчанию блокирует его запуск. Чтобы установить его для себя, нужно
-> разово разрешить запуск неподписанных приложений. Ниже — два способа: безопасный
-> (только для этого приложения) и полный (отключить проверку для всей системы).
+> ⚠️ **This is an unofficial app for personal use.** It is **not signed** with an
+> Apple Developer certificate and **not notarized**, so Gatekeeper blocks it by
+> default. To install it for yourself you allow it to run once. Two methods are
+> shown below: the safe one (this app only) and the broad one (disable the check
+> system-wide).
 
-**Системные требования:** сборка нативная под **Apple Silicon (arm64)** — на
-Intel-маках не запустится.
+**Requirements:** the build is native **Apple Silicon (arm64)** — it will not run
+on Intel Macs. The bundled ffmpeg/ffplay are also native arm64, so **Rosetta is
+not required**.
 
-#### 1. Установить Rosetta 2 (нужна обязательно)
+#### 1. Install the app
 
-Встроенные ffmpeg/ffplay (воспроизведение, превью волны, YouTube) собраны под Intel
-и работают через **Rosetta 2**. Установите её разово:
+Open **`cratedig-0.6.0.dmg`** and drag **cratedig** into **Applications**.
 
-```bash
-softwareupdate --install-rosetta --agree-to-license
-```
+#### 2. Allow the unsigned app to run
 
-(При первом обращении к ffmpeg macOS и сама предложит её поставить — можно согласиться там.)
+**Method A — this app only (recommended, safer):**
 
-#### 2. Установить приложение
-
-1. Откройте **`cratedig-0.1.0.dmg`** и перетащите **cratedig** в **Applications**.
-
-#### 3. Разрешить запуск неподписанного приложения
-
-**Способ A — только для этого приложения (рекомендуется, безопаснее):**
-
-1. Снимите карантинную метку с приложения в Терминале:
+1. Clear the quarantine flag in Terminal:
    ```bash
    xattr -dr com.apple.quarantine /Applications/cratedig.app
    ```
-2. Запустите: правый клик по **cratedig** → **Открыть** → **Открыть**.
-   (Обычный двойной клик в первый раз блокируется; правый клик → «Открыть» —
-   разрешает запуск именно этого приложения.)
+2. Launch it: right-click **cratedig** → **Open** → **Open**.
+   (A plain double-click is blocked the first time; right-click → "Open" allows
+   this specific app.)
 
-**Способ B — разрешить любые приложения для всей системы (если способ A не помог):**
+**Method B — allow any app system-wide (only if Method A fails):**
 
-> 🔒 **Предупреждение по безопасности.** Команда ниже отключает Gatekeeper
-> **для всей системы** — macOS перестанет проверять подпись у *всех* приложений.
-> Это снижает защиту. Используйте, только если понимаете риск, и **снова включите**
-> проверку после установки (см. шаг 4).
+> 🔒 **Security warning.** The command below disables Gatekeeper **system-wide** —
+> macOS stops checking the signature of *every* app. This lowers your protection.
+> Use it only if you understand the risk, and **re-enable** the check afterwards
+> (see step 3).
 
-1. Отключите проверку Gatekeeper (потребуется пароль администратора):
+1. Disable the Gatekeeper check (admin password required):
    ```bash
    sudo spctl --master-disable
    ```
-2. Откройте **Системные настройки → Конфиденциальность и безопасность**. В разделе
-   *Безопасность* появится пункт **«Разрешать приложения, загруженные из: Любого
-   источника»** — выберите его.
-3. Запустите **cratedig** из **Applications** (теперь обычным двойным кликом).
+2. Open **System Settings → Privacy & Security**. Under *Security*, an option
+   **"Allow applications downloaded from: Anywhere"** appears — select it.
+3. Launch **cratedig** from **Applications** (now a normal double-click).
 
-#### 4. (Для способа B) Вернуть защиту обратно
+3. **(For Method B) Turn protection back on.** Once the app has launched
+   successfully once, **re-enable Gatekeeper** — it isn't needed to run the
+   already-installed cratedig:
+   ```bash
+   sudo spctl --master-enable
+   ```
 
-После того как приложение один раз успешно запустилось, **включите Gatekeeper
-снова** — для запуска уже установленного cratedig он больше не нужен:
-
-```bash
-sudo spctl --master-enable
-```
-
-> **Про Xcode.** Для запуска готового `.dmg` **Xcode не нужен** — это уже собранное
-> приложение, ничего компилировать не требуется. Xcode и *Command Line Tools*
-> (`xcode-select --install`) нужны **только** если вы решите собирать cratedig из
-> исходников самостоятельно (см. `README.dev.md`).
----
-
-## Первый запуск
-
-При первом запуске cratedig автоматически создаёт свои настройки и базу данных.
-Дальше:
-
-1. Откройте **Настройки** (боковая панель / иконка шестерёнки).
-2. Вкладка **Paths** → добавьте свою папку (папки) с сэмплами в **Library folders**
-   и задайте **Download folder** и **Saved folder**, если хотите нестандартные
-   расположения.
-3. Нажмите **Scan** — cratedig проиндексирует каждый аудиофайл в этих папках.
-4. Нажмите **Analyze** — посчитает BPM, тональность и акустический «отпечаток»,
-   на котором работает *Find similar*. (Первый прогон на большой библиотеке займёт
-   время; дальше всё инкрементально.)
-
-Готово — листайте, ищите и играйте.
+> **About Xcode.** You **don't need Xcode** to run the prebuilt `.dmg` — it's an
+> already-compiled app, nothing to build. Xcode and the *Command Line Tools*
+> (`xcode-select --install`) are needed **only** if you choose to build cratedig
+> from source yourself (see `README.dev.md`).
 
 ---
 
-## Где хранятся ваши данные
+## Updates
 
-cratedig держит ваши данные в папке пользователя, а **не** в папке установки,
-поэтому удаление/переустановка никогда не трогают вашу библиотеку:
+cratedig checks for updates automatically on startup (installed builds only). When
+a newer version exists it shows a dialog; accept it and the app downloads, verifies
+and installs the update, then relaunches itself — on both Windows and macOS, no
+browser step. Every update is fetched from GitHub Releases and verified with a
+minisign signature before it is applied. The check is silent when you're already up
+to date or when offline.
 
-| Что | Windows | macOS |
+Most releases ship as a small **delta** (only the changed app code); a **full**
+installer is used for first install and when the runtime/dependencies change. Your
+data in the user folder (below) is never touched by an update.
+
+On macOS you can also apply a downloaded update file manually via
+**Help → "Apply update from file…"**.
+
+---
+
+## First run
+
+On first launch cratedig creates its settings and database automatically. Then:
+
+1. Open **Settings** (sidebar / gear icon).
+2. **Paths** tab → add your sample folder(s) under **Library folders**, and set a
+   **Download folder** and **Saved folder** if you want custom locations.
+3. Click **Scan** — cratedig indexes every audio file in those folders.
+4. Click **Analyze** — it computes BPM, key and the acoustic "fingerprint" that
+   *Find similar* runs on. (The first pass over a large library takes a while;
+   after that it's incremental.)
+
+That's it — browse, search and play.
+
+---
+
+## Where your data lives
+
+cratedig keeps your data in your user folder, **not** in the install folder, so
+uninstalling/reinstalling never touches your library:
+
+| What | Windows | macOS |
 |------|---------|-------|
-| Настройки (`config.toml`) | `%APPDATA%\cratedig\` | `~/Library/Application Support/cratedig/` |
-| База данных | `…\cratedig\data\cratedig.db` | `…/cratedig/data/cratedig.db` |
-| Загрузки и экспорт (Saved) | как задано в **Settings → Paths** | так же |
+| Settings (`config.toml`) | `%APPDATA%\cratedig\` | `~/Library/Application Support/cratedig/` |
+| Database | `…\cratedig\data\cratedig.db` | `…/cratedig/data/cratedig.db` |
+| Downloads & exports (Saved) | as set in **Settings → Paths** | same |
 
-Чтобы сделать резервную копию или перенести библиотеку — просто скопируйте эту папку.
+To back up or move your library, just copy that folder.
 
 ---
 
-## Получение токенов
+## Getting tokens
 
-Скачивание и обогащение метаданных используют сторонние сервисы. Все токены
-**необязательны** — приложение работает и без них, просто соответствующие функции
-будут недоступны. Вводятся токены в **Settings → Project Config** (или напрямую в
-`config.toml` — см. *Где хранятся ваши данные*).
+Downloading and metadata enrichment use third-party services. All tokens are
+**optional** — the app works without them, the corresponding features are just
+unavailable. Enter tokens in **Settings → Project Config** (or directly in
+`config.toml` — see *Where your data lives*).
 
-| Сервис | Зачем | Токен нужен? |
-|--------|-------|--------------|
-| **FreeSound** | Скачивание сэмплов | ✅ да |
-| **Yandex Music** | Скачивание треков | ✅ да |
-| **Discogs** | Обогащение метаданных треков | ⚪ опционально |
-| **MusicBrainz** | Обогащение метаданных треков | ❌ нет (только User-Agent) |
-| **YouTube** | Откат для скачивания треков | ❌ нет |
+| Service | What for | Token needed? |
+|---------|----------|---------------|
+| **FreeSound** | Downloading samples | ✅ yes |
+| **Yandex Music** | Downloading tracks | ✅ yes |
+| **Discogs** | Track metadata enrichment | ⚪ optional |
+| **MusicBrainz** | Track metadata enrichment | ❌ no (User-Agent only) |
+| **YouTube** | Fallback for track downloads | ❌ no |
 
-### FreeSound (сэмплы)
+### FreeSound (samples)
 
-Бесплатный API-ключ для поиска и скачивания сэмплов.
+A free API key for searching and downloading samples.
 
-1. Создайте аккаунт на **<https://freesound.org>**.
-2. Откройте **<https://freesound.org/apiv2/apply/>** → **Create new API Credentials**.
-3. Заполните форму (название и описание — любые, для личного использования).
-4. Скопируйте значение **«Client secret/Api key»**.
-5. Вставьте его в **Settings → Project Config → FreeSound token**.
+1. Create an account at **<https://freesound.org>**.
+2. Open **<https://freesound.org/apiv2/apply/>** → **Create new API Credentials**.
+3. Fill in the form (name and description can be anything, for personal use).
+4. Copy the **"Client secret/Api key"** value.
+5. Paste it into **Settings → Project Config → FreeSound token**.
 
-> Токен-only авторизация даёт скачивание HQ-mp3 **превью** (sampling-grade); полные
-> оригиналы требуют OAuth2 и не поддерживаются.
+> Token-only auth gives HQ-mp3 **preview** downloads (sampling-grade); full
+> originals require OAuth2 and are not supported.
 
-### Yandex Music (треки)
+### Yandex Music (tracks)
 
-OAuth-токен вашего аккаунта Яндекс.Музыки.
+An OAuth token for your Yandex Music account.
 
-1. Войдите в **<https://music.yandex.ru>** в браузере.
-2. Откройте ссылку авторизации (это документированный `client_id` библиотеки
-   `yandex-music-api`):
+1. Sign in at **<https://music.yandex.ru>** in your browser.
+2. Open the authorization link (the documented `client_id` of the
+   `yandex-music-api` library):
 
    ```
    https://oauth.yandex.ru/authorize?response_type=token&client_id=23cabbbdc6cd418abb4b39c32c41195d
    ```
-3. Яндекс перенаправит на страницу — скопируйте значение `access_token=...` из
-   адресной строки (URL).
-4. Вставьте его в **Settings → Project Config → Yandex token**.
+3. Yandex redirects you to a page — copy the `access_token=...` value from the
+   address bar (URL).
+4. Paste it into **Settings → Project Config → Yandex token**.
 
-> Токен привязан к вашему аккаунту — не публикуйте его. Альтернатива полю в
-> настройках: сохранить токен одной строкой в файл и указать путь через
-> `token_file` в `config.toml`.
+> The token is tied to your account — don't share it. As an alternative to the
+> settings field, save the token on a single line in a file and point to it via
+> `token_file` in `config.toml`.
 
-### Discogs (метаданные, опционально)
+### Discogs (metadata, optional)
 
-Личный токен для обогащения треков метаданными (улучшает именование и ранжирование).
+A personal token for enriching tracks with metadata (improves naming and ranking).
 
-1. Создайте аккаунт на **<https://www.discogs.com>**.
-2. Откройте **Settings → Developers** (**<https://www.discogs.com/settings/developers>**).
-3. Нажмите **Generate new token** и скопируйте **Personal access token**.
-4. Вставьте его в **Settings → Project Config → Discogs token**.
+1. Create an account at **<https://www.discogs.com>**.
+2. Open **Settings → Developers** (**<https://www.discogs.com/settings/developers>**).
+3. Click **Generate new token** and copy the **Personal access token**.
+4. Paste it into **Settings → Project Config → Discogs token**.
 
-### MusicBrainz (метаданные, без токена)
+### MusicBrainz (metadata, no token)
 
-Токен не нужен — MusicBrainz требует лишь описательный **User-Agent** (например,
-`ваш-email@example.com`). Задаётся в `config.toml` (`metadata.musicbrainz_useragent`)
-и уже заполнен значением по умолчанию.
-
----
-
-## Возможности
-
-### Просмотр и поиск
-Дерево папок слева, сортируемая таблица сэмплов справа (имя файла, класс,
-категория, BPM, тональность, частота дискретизации, теги, длительность). Введите
-текст в поле поиска, чтобы фильтровать по имени; используйте фильтры по тегам и
-категориям для сужения. Клик или прокрутка стрелками по строкам мгновенно
-**прослушивает** их; повторные действия запускают/останавливают воспроизведение.
-
-### Поиск похожих (Find similar)
-Выберите сэмпл и нажмите **Find similar** — cratedig отранжирует остальную
-библиотеку по акустической близости. Можно сместить акцент сопоставления на
-конкретные *аспекты* (Overall / Spectrum / Timbre / Pitch / Amplitude), чтобы найти,
-например, «тот же тембр, другая высота».
-
-### Авто-тегирование и классификация
-**Classify** угадывает класс инструмента и категорию по именам файлов и аудио.
-Анализ также выводит описательные character-теги (punchy, soft, clicky, subby,
-airy, metallic, tonal, percussive, long-tail …). Можно добавлять и свои теги —
-ручные и авто-теги учитываются раздельно.
-
-### Крейты и избранное
-Группируйте сэмплы в **крейты** (правый клик по строке → *Add to crate / New
-crate*) и отмечайте **избранное** звёздочкой. И то, и другое отображается как
-закреплённые ветви в дереве.
-
-### Скачивание нового аудио
-Откройте панель **Download**, выберите режим и ищите:
-
-- **Samples → FreeSound** (нужен бесплатный API-токен)
-- **Tracks → Yandex Music** с откатом на **YouTube** (для Yandex нужен токен; для YouTube — нет)
-
-Найденное можно прослушать (когда бэкенд даёт превью) и скачать прямо в библиотеку,
-где оно автоматически индексируется. Результаты по трекам обогащаются метаданными
-**MusicBrainz / Discogs** для лучшего именования и ранжирования.
-
-> **Токены:** в Settings → **Project Config** есть поля для токенов FreeSound,
-> Yandex и Discogs. Пошаговые инструкции по получению каждого — в разделе
-> [**Получение токенов**](#получение-токенов) ниже.
-
-### Редактор в стиле Simpler
-Загрузите сэмпл в панель редактора, чтобы задать **регион**, **фейды**, огибающую
-**ADSR**, превью **reverse** и **loop**. Определяйте **транзиенты** и делайте
-**авто-нарезку**. **Экспортируйте** отрендеренный регион в папку *Saved*
-(автоиндексируется) или **перетащите** его прямо в Ableton / вашу DAW.
-
-### Сравнение A/B
-Откройте два сэмпла рядом и переключайтесь между ними с **выравниванием громкости**,
-чтобы разница в громкости не сбивала слух.
-
-### Исследователь Ableton `.als`
-Перетащите проект Ableton `.als` на cratedig, чтобы увидеть список его
-**инструментов, плагинов и треков** (AU/VST2/VST3/M4L). Вкладка **Library Match**
-находит, какие из сэмплов проекта есть в вашей библиотеке — правый клик, чтобы
-показать в файловом менеджере, добавить в крейт или создать крейт из них. Доступно
-на английском и русском.
-
-### Здоровье и дубликаты
-Дашборд **Health** показывает статистику библиотеки и помечает проблемы (например,
-отсутствующие файлы) с кнопкой **Remove Missing** в один клик. Инструмент
-**Duplicates** группирует идентичные файлы и предлагает, какую копию оставить.
-
-### Настройки
-Три вкладки — **Preferences** (поведение: авто-превью, режим загрузки по умолчанию,
-видимость колонок, удаление в корзину, …), **Project Config** (токены, метаданные,
-расширения аудиофайлов) и **Paths** (папки библиотеки/загрузок/Saved, база данных).
-Изменения конфигурации библиотеки или токенов могут потребовать перезапуска
-приложения.
+No token needed — MusicBrainz only requires a descriptive **User-Agent** (e.g.
+`your-email@example.com`). It's set in `config.toml`
+(`metadata.musicbrainz_useragent`) and already filled with a default.
 
 ---
 
-## Советы и решение проблем
+## Features
 
-- **Нет звука / нет волны:** воспроизведение использует встроенные ffmpeg/ffplay;
-  если вы запускаете из исходников, убедитесь, что `ffmpeg` и `ffplay` есть в PATH.
-- **Find similar ничего не возвращает:** сначала выполните **Analyze** — для поиска
-  похожих нужен акустический отпечаток.
-- **Загрузки не работают:** проверьте соответствующий токен в *Settings → Project
-  Config*. Локальный VPN/прокси тоже может блокировать результаты FreeSound.
-- **Сбросить всё:** закройте cratedig и удалите папку данных из таблицы выше (это
-  сотрёт ваш индекс и настройки, но не сами аудиофайлы).
+### Browse and search
+A folder tree on the left, a sortable sample table on the right (filename, class,
+category, BPM, key, sample rate, tags, duration). Type in the search box to filter
+by name; use the tag and category filters to narrow down. Clicking or arrow-keying
+through rows instantly **auditions** them; repeating the action starts/stops
+playback.
+
+### Find similar
+Select a sample and click **Find similar** — cratedig ranks the rest of the library
+by acoustic closeness. You can bias the match toward specific *aspects* (Overall /
+Spectrum / Timbre / Pitch / Amplitude) to find, say, "same timbre, different pitch".
+
+### Auto-tagging and classification
+**Classify** guesses the instrument class and category from filenames and audio.
+Analysis also derives descriptive character tags (punchy, soft, clicky, subby,
+airy, metallic, tonal, percussive, long-tail …). You can add your own tags too —
+manual and auto tags are tracked separately.
+
+### Crates and favorites
+Group samples into **crates** (right-click a row → *Add to crate / New crate*) and
+mark **favorites** with a star. Both show up as pinned branches in the tree.
+
+### Downloading new audio
+Open the **Download** panel, pick a mode and search:
+
+- **Samples → FreeSound** (needs a free API token)
+- **Tracks → Yandex Music** with a **YouTube** fallback (Yandex needs a token; YouTube doesn't)
+
+You can audition results (when the backend provides a preview) and download them
+straight into the library, where they're indexed automatically. Track results are
+enriched with **MusicBrainz / Discogs** metadata for better naming and ranking.
+
+> **Tokens:** Settings → **Project Config** has fields for FreeSound, Yandex and
+> Discogs tokens. Step-by-step instructions for each are in the
+> [**Getting tokens**](#getting-tokens) section above.
+
+### Simpler-style editor
+Load a sample into the editor panel to set a **region**, **fades**, an **ADSR**
+envelope, plus **reverse** and **loop** previews. Detect **transients** and
+**auto-slice**. **Export** the rendered region into the *Saved* folder
+(auto-indexed) or **drag** it straight into Ableton / your DAW.
+
+### A/B compare
+Open two samples side by side and switch between them with **loudness matching**,
+so a volume difference doesn't bias your ears.
+
+### Project Checker (multi-DAW)
+Drop a DAW project onto cratedig to see its **instruments, plugins and tracks**.
+The format is detected from the file: **Ableton** (`.als`), **Bitwig**, **Cubase/
+Nuendo**, **Reaper** (`.rpp`), **FL Studio** (`.flp`), **Studio One**, **Logic**
+and **Pro Tools** (`.ptx`). Plugins are recognized as AU/VST2/VST3/M4L. The
+**Library Match** view finds which of the project's samples already exist in your
+library — right-click to reveal in the file manager, add to a crate, or build a
+crate from them.
+
+### Convert projects
+From the Project Checker, click **Convert…** to export the loaded project to another
+format: **Reaper `.RPP`**, **Ableton `.als`**, or **AAF**. Conversion transfers
+track/metadata structure and copies the referenced sample files; it does not carry
+over plugin state, automation or rendered audio.
+
+### Health and duplicates
+The **Health** dashboard shows library statistics and flags issues (e.g. missing
+files) with a one-click **Remove Missing** button. The **Duplicates** tool groups
+identical files and suggests which copy to keep.
+
+### Settings
+Three tabs — **Preferences** (behavior: auto-preview, default download mode, column
+visibility, send-to-trash, …), **Project Config** (tokens, metadata, audio file
+extensions) and **Paths** (library/download/Saved folders, database). Changing the
+library config or tokens may require restarting the app.
 
 ---
 
-## Лицензия и особенности
+## Tips & troubleshooting
 
-Форк для личного использования, вдохновлённый Sononym. Включает ffmpeg/ffplay
-(проект FFmpeg) и построен на PySide6, librosa, yt-dlp и других.
+- **No sound / no waveform:** playback uses the bundled ffmpeg/ffplay; if you run
+  from source, make sure `ffmpeg` and `ffplay` are on your PATH.
+- **Find similar returns nothing:** run **Analyze** first — similarity needs the
+  acoustic fingerprint.
+- **Downloads don't work:** check the relevant token in *Settings → Project
+  Config*. A local VPN/proxy can also block FreeSound results.
+- **Reset everything:** quit cratedig and delete the data folder from the table
+  above (this wipes your index and settings, but not the audio files themselves).
+
+---
+
+## License & credits
+
+A personal-use fork inspired by Sononym. Bundles ffmpeg/ffplay (the FFmpeg project)
+and is built on PySide6, librosa, yt-dlp and others.
 
 ## Contributors
 
-Отдельная благодарность [@OatmillerTools](https://github.com/OatmillerTools) за помощь в разработке бэкенда ALS Explorer модуля и ценный вклад в проект. Оригинальный [Project-Checker-Live](https://github.com/OatmillerTools/Project-Checker-Live)
+Special thanks to [@OatmillerTools](https://github.com/OatmillerTools) for help
+developing the backend of the Project Checker (ALS Explorer) module and valuable
+contributions to the project. Original
+[Project-Checker-Live](https://github.com/OatmillerTools/Project-Checker-Live).
