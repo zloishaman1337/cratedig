@@ -410,6 +410,79 @@ def download_and_verify(
 
 
 # --------------------------------------------------------------------------- #
+# Delta-over-the-wire: signed release-meta + tier selection (UPDATE_RULES.md)  #
+# --------------------------------------------------------------------------- #
+
+# A tiny signed sidecar asset on each release describing which versions the delta
+# applies onto. The client verifies it before deciding delta-vs-full so a Windows
+# delta (an opaque Inno .exe carrying no manifest) can still be pre-gated.
+RELEASE_META_TEMPLATE = "release-meta-{v}.json"
+
+
+@dataclass(frozen=True)
+class ReleaseMeta:
+    version: str
+    delta_from: tuple[str, ...]  # installed versions this release's delta may patch
+
+
+def build_release_meta(version: str, delta_from: list[str]) -> dict:
+    """Assemble the ``release-meta-<ver>.json`` document (signed at publish time)."""
+    return {"version": str(version), "delta_from": [str(v) for v in delta_from]}
+
+
+def parse_release_meta(doc: dict) -> ReleaseMeta:
+    """Parse a release-meta document; tolerate a missing/empty ``delta_from``."""
+    return ReleaseMeta(
+        version=str(doc.get("version", "")),
+        delta_from=tuple(str(v) for v in doc.get("delta_from", []) or ()),
+    )
+
+
+def choose_tier(
+    meta: ReleaseMeta | None,
+    current_version: str,
+    release: Release,
+    os_name: str,
+) -> str:
+    """Pick ``"delta"`` only when it is safe + available; otherwise ``"full"``.
+
+    Delta requires: a verified meta exists, the installed version is listed in its
+    ``delta_from``, AND the release actually carries a delta asset for this OS.
+    Any miss falls back to the always-present full installer.
+    """
+    if meta is None or current_version not in meta.delta_from:
+        return "full"
+    try:
+        select_asset(release, os_name, "delta")
+    except UpdateError:
+        return "full"
+    return "delta"
+
+
+def fetch_release_meta(
+    release: Release,
+    dest_dir: str | os.PathLike[str],
+    *,
+    cancel=None,
+) -> ReleaseMeta | None:
+    """Download + minisign-verify the release-meta sidecar; parse it. ``None`` when
+    the release has no (signed) meta asset — the caller then defaults to full."""
+    name = RELEASE_META_TEMPLATE.format(v=release.version)
+    asset = next((a for a in release.assets if a.name == name), None)
+    sig = next((a for a in release.assets if a.name == name + SIGNATURE_SUFFIX), None)
+    if asset is None or sig is None:
+        return None
+    asset_path = download_asset(asset, dest_dir, cancel=cancel)
+    sig_path = download_asset(sig, dest_dir, cancel=cancel)
+    verify_signature(asset_path, sig_path)
+    try:
+        doc = json.loads(Path(asset_path).read_text("utf-8"))
+    except (json.JSONDecodeError, OSError, UnicodeDecodeError) as exc:
+        raise UpdateError(f"release-meta is not valid JSON: {exc}") from exc
+    return parse_release_meta(doc)
+
+
+# --------------------------------------------------------------------------- #
 # macOS in-app apply (thin side-effecting layer; not exercised on Windows CI)  #
 # --------------------------------------------------------------------------- #
 

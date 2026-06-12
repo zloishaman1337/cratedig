@@ -1056,6 +1056,25 @@ class TestSampleTable:
         table.set_samples([Sample(id=1, path="/packs/a.wav", filename="a.wav")], scores={1: 0.5})
         assert not table._table.isColumnHidden(sim_col)
 
+    def test_clicking_same_row_index_after_repopulate_emits_selection(self):
+        # Regression: switching tree node (e.g. library -> crate) repopulates the
+        # table but Qt keeps the current row index, so clicking the same index
+        # (row 0, the typical first crate item) used to emit nothing -> no preview.
+        self._app()
+        from cratedig.gui.sample_table import SampleTable
+
+        table = SampleTable()
+        emitted: list = []
+        table.sample_selected.connect(emitted.append)
+
+        table.set_samples([Sample(id=1, path="/packs/a.wav", filename="a.wav")])
+        table._table.setCurrentCell(0, 0)  # select row 0 of list A
+        assert emitted and emitted[-1].id == 1
+
+        table.set_samples([Sample(id=2, path="/packs/b.wav", filename="b.wav")])
+        table._table.setCurrentCell(0, 0)  # user clicks row 0 of the new (crate) list
+        assert emitted[-1].id == 2
+
 
 class TestSimplerGeometry:
     """Pure time/pixel mapping + region clamping for the Simpler waveform."""

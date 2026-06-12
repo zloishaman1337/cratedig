@@ -54,9 +54,16 @@ class UpdateDownloadThread(QThread):
     def run(self) -> None:  # noqa: D401 - QThread entry point
         try:
             dest = tempfile.mkdtemp(prefix="cratedig-update-dl-")
+            # Prefer a delta when the signed release-meta says it applies onto our
+            # installed version (and a delta asset exists); else fall back to full.
+            os_name = updater.current_os()
+            meta = updater.fetch_release_meta(self._release, dest, cancel=lambda: self._cancelled)
+            tier = updater.choose_tier(meta, cratedig.__version__, self._release, os_name)
             path = updater.download_and_verify(
                 self._release,
                 dest,
+                os_name=os_name,
+                tier=tier,
                 progress=lambda d, t: self.progress.emit(d, t),
                 cancel=lambda: self._cancelled,
             )

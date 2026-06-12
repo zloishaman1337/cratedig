@@ -211,6 +211,9 @@ class SampleTable(QWidget):
         self._samples = list(samples)
         self._tags_by_id = tags_by_id if tags_by_id is not None else {}
         self._table.blockSignals(True)
+        # Drop any stale current cell so re-clicking the same row index after a
+        # repopulate (e.g. switching to a crate) still fires currentCellChanged.
+        self._table.setCurrentCell(-1, -1)
         self._table.setColumnHidden(_SIM_COL, scores is None)
         self._table.setRowCount(len(self._samples))
 

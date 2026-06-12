@@ -36,9 +36,13 @@ datas = [
 ]
 # librosa ships data files and lazy-imports submodules PyInstaller may miss.
 datas += collect_data_files("librosa")
+# aaf2 (Convert → AAF export) ships its AAF model/metadict as package data and
+# lazy-imports submodules.
+datas += collect_data_files("aaf2")
 
 hiddenimports = []
 hiddenimports += collect_submodules("librosa")
+hiddenimports += collect_submodules("aaf2")
 
 a = Analysis(
     [str(SPECDIR / "cratedig_gui.py")],

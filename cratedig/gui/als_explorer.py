@@ -7,6 +7,7 @@ import os
 from PySide6.QtCore import Qt, Signal
 from PySide6.QtGui import QDragEnterEvent, QDropEvent
 from PySide6.QtWidgets import (
+    QApplication,
     QFileDialog,
     QFrame,
     QHBoxLayout,
@@ -338,18 +339,37 @@ class AlsExplorerPanel(QWidget):
         file_exts: tuple[str, ...] = (".als",),
         file_filter: str = "Ableton Live Set (*.als)",
         bare_is_native: bool = True,
+        detect: bool = False,
     ) -> None:
         super().__init__(parent)
         self.setAcceptDrops(True)
 
+        # Detect mode: one panel for every supported DAW. The parser/normalizer/
+        # bare_is_native are resolved per file by extension in _load_file; the
+        # exts/filter span every format up front so the open dialog + drop accept
+        # any project.
+        self._detect = detect
+        if detect:
+            from ..projects_fmt import detect as _detect_mod
+
+            parser = None
+            normalizer = None
+            title = "Project Checker"
+            file_exts = _detect_mod.ALL_EXTS
+            file_filter = _detect_mod.file_filter()
+
         self._parser = parser
         self._normalizer = normalizer
         self._title = title
+        self._base_title = title
         self._file_exts = tuple(e.lower() for e in file_exts)
         self._file_filter = file_filter
         self._bare_is_native = bare_is_native
 
         self._data: dict | None = None
+        self._loaded_path: str | None = None     # source project, for Convert
+        self._source_format = "Ableton Live"      # detected DAW name, for Convert
+        self._btn_convert = None                  # created in _build_ui
         self._match_seq = 0
         self._match_tab: QWidget | None = None
         self._crates: list = []
@@ -429,8 +449,8 @@ class AlsExplorerPanel(QWidget):
         header_layout.setContentsMargins(16, 8, 12, 8)
         header_layout.setSpacing(8)
 
-        title_lbl = _colored_label(self._title, C_HEADER, bold=True, font_size=16)
-        header_layout.addWidget(title_lbl)
+        self._title_lbl = _colored_label(self._title, C_HEADER, bold=True, font_size=16)
+        header_layout.addWidget(self._title_lbl)
         header_layout.addStretch()
 
         lang_widget = QWidget()
@@ -463,6 +483,13 @@ class AlsExplorerPanel(QWidget):
         self._btn_match.setEnabled(False)
         self._btn_match.clicked.connect(self._on_match_clicked)
         header_layout.addWidget(self._btn_match)
+
+        self._btn_convert = QPushButton("Convert…")
+        self._btn_convert.setIcon(icon("refresh"))
+        self._btn_convert.setMinimumWidth(110)
+        self._btn_convert.setEnabled(False)
+        self._btn_convert.clicked.connect(self._on_convert_clicked)
+        header_layout.addWidget(self._btn_convert)
 
         self._btn_rescan = QPushButton("Rescan plugins")
         self._btn_rescan.setIcon(icon("refresh"))
@@ -580,7 +607,27 @@ class AlsExplorerPanel(QWidget):
         if path:
             self._load_file(path)
 
+    def _resolve_detect(self, path: str) -> bool:
+        """In detect mode, pick parser/normalizer by extension; update the title.
+
+        Returns False (and warns) when the extension is unsupported.
+        """
+        from ..projects_fmt import detect as _detect_mod
+
+        spec = _detect_mod.parser_for(path)
+        if spec is None:
+            QMessageBox.warning(self, T("warn_invalid_title"), T("warn_invalid_msg"))
+            return False
+        self._parser = spec.parser
+        self._normalizer = spec.normalizer
+        self._bare_is_native = spec.bare_is_native
+        self._source_format = spec.name
+        self._title_lbl.setText(f"{self._base_title} — {spec.name}")
+        return True
+
     def _load_file(self, path: str) -> None:
+        if self._detect and not self._resolve_detect(path):
+            return
         try:
             data = self._parser(path)
             if self._normalizer is not None:
@@ -589,14 +636,48 @@ class AlsExplorerPanel(QWidget):
             QMessageBox.critical(self, T("err_title"), str(exc))
             return
         self._data = data
+        self._loaded_path = path
         self._lbl_file.setText(os.path.basename(path))
         self._lbl_file.setStyleSheet(f"color: {C_VALUE}; background: transparent;")
         self._lbl_version.setText(data.get("ableton_version") or data.get("version", ""))
         self._btn_match.setEnabled(True)
+        if self._btn_convert is not None:
+            self._btn_convert.setEnabled(True)
         self._render(data)
         # Request a cached installed-plugin scan to populate badges (no-op if no
         # worker is connected, e.g. in isolated panel tests).
         self.pluginScanRequested.emit(False)
+
+    def _on_convert_clicked(self) -> None:
+        """Open the Convert modal and run the conversion for the loaded project."""
+        if self._data is None or self._loaded_path is None:
+            return
+        from .convert_dialog import ConvertDialog
+        from ..convert import convert_project, ir_from_checker_data, target_extension
+
+        dlg = ConvertDialog(self._loaded_path, self)
+        if dlg.exec() != dlg.DialogCode.Accepted:
+            return
+        target, options, out_path = dlg.result_spec(target_extension)
+        if not out_path:
+            return
+
+        ir = ir_from_checker_data(self._data, self._loaded_path, self._source_format)
+        QApplication.setOverrideCursor(Qt.CursorShape.WaitCursor)
+        try:
+            res = convert_project(ir, target, out_path, options)
+        except Exception as exc:  # noqa: BLE001 — surface any writer/dep error
+            QApplication.restoreOverrideCursor()
+            QMessageBox.critical(self, T("err_title"), str(exc))
+            return
+        QApplication.restoreOverrideCursor()
+        missing = res.get("missing") or []
+        msg = f"Converted to:\n{res['out_path']}"
+        if res.get("copied"):
+            msg += f"\n\nCopied {len(res['copied'])} sample(s) into ./media/."
+        if missing:
+            msg += f"\n\n{len(missing)} referenced sample(s) not found and skipped."
+        QMessageBox.information(self, "Convert", msg)
 
     def _on_match_clicked(self) -> None:
         if self._data is None:

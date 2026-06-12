@@ -25,7 +25,7 @@ fi
 # shellcheck disable=SC1091
 source .venv/bin/activate
 python -m pip install -U pip
-pip install -e ".[gui,analysis,download,metadata,build]"
+pip install -e ".[gui,analysis,download,metadata,convert,build]"
 
 echo "==> Fetch ffmpeg/ffplay (static arm64 from osxexperts.net, FFmpeg 8.1)"
 mkdir -p packaging/bin/macos
@@ -71,30 +71,48 @@ python packaging/make_manifest.py generate dist/cratedig.app "$VERSION" mac "$NE
 PREV="$(ls "$MANIFEST_DIR"/cratedig-*-mac.json 2>/dev/null | grep -v "$NEW_MANIFEST" \
         | sort -V | tail -n 1 || true)"
 
+# Auto-tier decides whether THIS release can also offer a delta. The full .dmg is
+# ALWAYS built (fresh installs + the client's fallback); a delta .zip is built
+# ALONGSIDE it when the diff is code-only (delta-over-the-wire).
 TIER="full"
 if [[ -n "$PREV" ]]; then
   DIFF_OUT="$(python packaging/make_manifest.py diff "$PREV" "$NEW_MANIFEST")"
   echo "$DIFF_OUT" | sed 's/^/    /'
   if echo "$DIFF_OUT" | grep -q 'tier=delta'; then TIER="delta"; fi
 fi
+WANT_DELTA=""
+[[ "$TIER" == "delta" && -n "$PREV" ]] && WANT_DELTA=1
 
-if [[ "$TIER" == "delta" ]]; then
+echo "==> DMG (full, v$VERSION)"
+bash packaging/macos/make_dmg.sh "$VERSION"
+FULL="dist/cratedig-${VERSION}.dmg"
+ASSETS=("$FULL")
+
+if [[ -n "$WANT_DELTA" ]]; then
   echo "==> macOS DELTA update zip (v$VERSION)"
-  OUT="dist/cratedig-update-${VERSION}-mac.zip"
-  python packaging/make_manifest.py build-delta-zip "$PREV" "$NEW_MANIFEST" dist/cratedig.app "$OUT"
-else
-  echo "==> DMG (full, v$VERSION)"
-  bash packaging/macos/make_dmg.sh "$VERSION"
-  OUT="dist/cratedig-${VERSION}.dmg"
+  DELTA="dist/cratedig-update-${VERSION}-mac.zip"
+  python packaging/make_manifest.py build-delta-zip "$PREV" "$NEW_MANIFEST" dist/cratedig.app "$DELTA"
+  ASSETS+=("$DELTA")
 fi
 
+echo "==> Release meta (delta gate)"
+META="dist/release-meta-${VERSION}.json"
+if [[ -n "$WANT_DELTA" ]]; then
+  python packaging/make_manifest.py emit-release-meta "$NEW_MANIFEST" "$META" --old "$PREV"
+else
+  python packaging/make_manifest.py emit-release-meta "$NEW_MANIFEST" "$META"
+fi
+ASSETS+=("$META")
+
 if [[ -n "${SIGN:-}" || -n "${PUBLISH:-}" ]]; then
-  echo "==> Sign asset (minisign)"
+  echo "==> Sign assets (minisign)"
   : "${MINISIGN_PASSWORD:?set MINISIGN_PASSWORD (the minisign.key password) before signing}"
   [[ -f "$ROOT/minisign.key" ]] || { echo "minisign.key not found at $ROOT/minisign.key"; exit 1; }
-  printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -m "$OUT" -s "$ROOT/minisign.key" \
-    -x "$OUT.minisig" -c "cratedig $VERSION asset" -t "cratedig $VERSION"
-  echo "    signed: $OUT.minisig"
+  for a in "${ASSETS[@]}"; do
+    printf '%s\n' "$MINISIGN_PASSWORD" | minisign -S -m "$a" -s "$ROOT/minisign.key" \
+      -x "$a.minisig" -c "cratedig $VERSION" -t "cratedig $VERSION"
+    echo "    signed: $a.minisig"
+  done
 fi
 
 if [[ -n "${PUBLISH:-}" ]]; then
@@ -103,15 +121,17 @@ if [[ -n "${PUBLISH:-}" ]]; then
     gh release create "$VERSION" --title "CRATEDIG $VERSION" \
       --notes "cratedig $VERSION (online-update baseline)."
   fi
-  gh release upload "$VERSION" "$OUT" "$OUT.minisig" --clobber
+  UPLOADS=()
+  for a in "${ASSETS[@]}"; do UPLOADS+=("$a" "$a.minisig"); done
+  gh release upload "$VERSION" "${UPLOADS[@]}" --clobber
   echo "    published $VERSION"
 fi
 
 echo
-echo "Done ($TIER):"
+echo "Done (tier=$TIER, delta=${WANT_DELTA:-0}):"
 echo "  dist/cratedig.app"
 echo "  $NEW_MANIFEST"
-echo "  $OUT"
+for a in "${ASSETS[@]}"; do echo "  $a"; done
 echo
 echo "Unsigned build. On the target Mac, first launch = right-click the app -> Open,"
 echo "or run:  xattr -dr com.apple.quarantine /Applications/cratedig.app"

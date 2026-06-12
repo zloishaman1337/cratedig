@@ -49,14 +49,6 @@ from .settings_dialog import SettingsDialog
 from .settings_tabs import _keys
 from .toast import ToastManager
 from .theme import ACCENT, app_icon, icon
-from ..projects_fmt.bitwig import parse_bwproject
-from ..projects_fmt.nuendo import parse_npr
-from ..projects_fmt.reaper import parse_rpp
-from ..projects_fmt.studioone import parse_song
-from ..projects_fmt.flstudio import parse_flp
-from ..projects_fmt.logic import parse_logicx
-from ..projects_fmt.protools import parse_ptx
-from ..projects_fmt.common import to_checker_data
 from .tag_editor import TagEditor
 from .tree_pane import TreePane
 from .simpler_pane import SimplerPane
@@ -275,86 +267,42 @@ class MainWindow(QMainWindow):
         self._main_splitter.addWidget(self._download_pane)
         self._main_splitter.setSizes([560, 140])
 
-        # --- stacked pages: samples · Ableton · Health · then the DAW checkers ---
-        # Every DAW checker reuses the full Ableton panel (identical GUI + features);
-        # a parser + the to_checker_data normalizer adapt each format's data into the
-        # rich schema. Cubase shares parse_npr (.cpr is the same RIFF/NUNDROOT tree).
-        self._als_panel = AlsExplorerPanel()
+        # --- stacked pages: samples · Project Checker · Health ---
+        # One unified Project Checker auto-detects the DAW from the opened file's
+        # extension (cratedig/projects_fmt/detect.py) and routes to the right parser,
+        # so a single panel replaces the former per-DAW pages.
+        self._project_checker = AlsExplorerPanel(detect=True)
         self._health_panel = HealthPanel()
 
-        # (parser, normalizer, title, exts, filter, bare_is_native) per DAW page.
-        _daw_specs = [
-            (parse_bwproject, to_checker_data, "Bitwig Project Checker",
-             (".bwproject",), "Bitwig project (*.bwproject)", True),
-            (parse_npr, to_checker_data, "Nuendo Project Checker",
-             (".npr",), "Nuendo project (*.npr)", False),
-            (parse_npr, to_checker_data, "Cubase Project Checker",
-             (".cpr",), "Cubase project (*.cpr)", False),
-            (parse_rpp, to_checker_data, "Reaper Project Checker",
-             (".rpp", ".rpp-bak"), "Reaper project (*.rpp *.rpp-bak)", False),
-            (parse_flp, to_checker_data, "FL Studio Project Checker",
-             (".flp",), "FL Studio project (*.flp)", True),
-            (parse_song, to_checker_data, "Studio One Project Checker",
-             (".song",), "Studio One song (*.song)", False),
-            (parse_logicx, to_checker_data, "Logic Pro Project Checker",
-             (".logicx",), "Logic project (*.logicx)", False),
-            (parse_ptx, to_checker_data, "Pro Tools Project Checker",
-             (".ptx", ".ptf"), "Pro Tools session (*.ptx *.ptf)", False),
-        ]
-        self._daw_panels = [
-            AlsExplorerPanel(parser=p, normalizer=n, title=t,
-                             file_exts=e, file_filter=f, bare_is_native=b)
-            for (p, n, t, e, f, b) in _daw_specs
-        ]
-        (self._bitwig_panel, self._nuendo_panel, self._cubase_panel,
-         self._reaper_panel, self._flstudio_panel, self._studioone_panel,
-         self._logic_panel, self._protools_panel) = self._daw_panels
-
-        # All AlsExplorerPanel instances share the plugin-scan / match / badge wiring.
-        self._checker_panels = [self._als_panel, *self._daw_panels]
+        # All checker panels share the plugin-scan / match / badge wiring.
+        self._checker_panels = [self._project_checker]
 
         self._pages = QStackedWidget()
         self._pages.setObjectName("PageSurface")
-        self._pages.addWidget(self._main_splitter)  # index 0 — samples
-        self._pages.addWidget(self._als_panel)      # index 1 — Ableton
-        self._pages.addWidget(self._health_panel)   # index 2 — Health
-        for panel in self._daw_panels:              # index 3+ — DAW checkers
-            self._pages.addWidget(panel)
+        self._pages.addWidget(self._main_splitter)     # index 0 — samples
+        self._pages.addWidget(self._project_checker)   # index 1 — Project Checker
+        self._pages.addWidget(self._health_panel)      # index 2 — Health
 
         # --- left sidebar navigator (always visible) ---
         self._settings_btn = QPushButton("Settings")
         self._duplicates_btn = QPushButton("Duplicates")
         self._ab_compare_btn = QPushButton("A/B Compare")
         self._nav_samples = QPushButton("Samples")
-        self._nav_ableton = QPushButton("Ableton")
+        self._nav_checker = QPushButton("Project Checker")
         self._nav_health = QPushButton("Health")
-        self._nav_bitwig = QPushButton("Bitwig")
-        self._nav_nuendo = QPushButton("Nuendo")
-        self._nav_cubase = QPushButton("Cubase")
-        self._nav_reaper = QPushButton("Reaper")
-        self._nav_flstudio = QPushButton("FL Studio")
-        self._nav_studioone = QPushButton("Studio One")
-        self._nav_logic = QPushButton("Logic Pro")
-        self._nav_protools = QPushButton("Pro Tools")
         self._settings_btn.setIcon(icon("settings"))
         self._duplicates_btn.setIcon(icon("duplicates"))
         self._ab_compare_btn.setIcon(icon("compare"))
         self._nav_samples.setIcon(icon("samples"))
-        self._nav_ableton.setIcon(icon("ableton"))
+        self._nav_checker.setIcon(icon("ableton"))
         self._nav_health.setIcon(icon("health"))
-        # nav order MUST mirror the stacked-page order so nav id == page index.
-        self._daw_nav_buttons = [
-            self._nav_bitwig, self._nav_nuendo, self._nav_cubase, self._nav_reaper,
-            self._nav_flstudio, self._nav_studioone, self._nav_logic, self._nav_protools,
-        ]
-        for btn in self._daw_nav_buttons:
-            btn.setIcon(icon("ableton"))
         self._nav_group = QButtonGroup(self)
         self._nav_group.setExclusive(True)
         for btn in (self._settings_btn, self._duplicates_btn, self._ab_compare_btn):
             btn.setMinimumHeight(38)
+        # nav order MUST mirror the stacked-page order so nav id == page index.
         for idx, btn in enumerate(
-            [self._nav_samples, self._nav_ableton, self._nav_health, *self._daw_nav_buttons]
+            [self._nav_samples, self._nav_checker, self._nav_health]
         ):
             btn.setCheckable(True)
             btn.setMinimumHeight(38)
@@ -387,9 +335,7 @@ class MainWindow(QMainWindow):
         sidebar_layout.addSpacing(10)
         sidebar_layout.addWidget(section_library)
         sidebar_layout.addWidget(self._nav_samples)
-        sidebar_layout.addWidget(self._nav_ableton)
-        for btn in self._daw_nav_buttons:
-            sidebar_layout.addWidget(btn)
+        sidebar_layout.addWidget(self._nav_checker)
         sidebar_layout.addWidget(self._nav_health)
         sidebar_layout.addStretch()
 
@@ -812,14 +758,20 @@ class MainWindow(QMainWindow):
 
         from PySide6.QtWidgets import QApplication, QMessageBox
 
+        import cratedig
         from cratedig import updater
 
+        lower = installer_path.lower()
         try:
             if sys.platform == "win32":
-                # Inno installer closes the app, swaps files, and relaunches.
+                # Both full (cratedig-setup-*.exe) and delta (cratedig-update-*.exe)
+                # are Inno installers: launching closes the app, swaps files, relaunches.
                 os.startfile(installer_path)
+            elif lower.endswith(".zip"):
+                # macOS delta: stage the verified zip + spawn the restart helper.
+                updater.apply_update(installer_path, cratedig.__version__)
             else:
-                # macOS: mount the verified .dmg and swap the .app via restart helper.
+                # macOS full: mount the verified .dmg and swap the .app via restart helper.
                 updater.apply_dmg_update(installer_path)
         except updater.UpdateError as exc:
             self._toasts.show(f"Update failed: {exc}", "error")

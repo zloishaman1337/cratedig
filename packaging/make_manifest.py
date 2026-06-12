@@ -156,6 +156,24 @@ def _cmd_build_delta_zip(args) -> int:
     return 0
 
 
+def _cmd_emit_release_meta(args) -> int:
+    """Write the signed-at-publish release-meta sidecar (delta-over-the-wire gate).
+
+    ``delta_from`` lists the prior version when this build ships a delta; it is
+    empty for a full-only release, so the client always falls back to full.
+    """
+    new = _load(args.new)
+    delta_from: list[str] = []
+    if args.old:
+        old = _load(args.old)
+        if decide_tier(diff_manifests(old, new), new) == "delta":
+            delta_from = [old["version"]]
+    doc = updater.build_release_meta(new["version"], delta_from)
+    Path(args.out).write_text(json.dumps(doc, indent=2) + "\n", encoding="utf-8")
+    print(f"release-meta: {args.out} (delta_from={delta_from})")
+    return 0
+
+
 def _cmd_build_win_include(args) -> int:
     old, new = _load(args.old), _load(args.new)
     d = diff_manifests(old, new)
@@ -201,6 +219,11 @@ def main(argv: list[str] | None = None) -> int:
     bi = sub.add_parser("build-win-include")
     bi.add_argument("old"); bi.add_argument("new"); bi.add_argument("out")
     bi.set_defaults(func=_cmd_build_win_include)
+
+    rm = sub.add_parser("emit-release-meta")
+    rm.add_argument("new"); rm.add_argument("out")
+    rm.add_argument("--old", default=None)
+    rm.set_defaults(func=_cmd_emit_release_meta)
 
     args = ap.parse_args(argv)
     return args.func(args)

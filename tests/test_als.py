@@ -446,8 +446,50 @@ def test_als_explorer_gui_tab_count(als_file):
     w.close()
 
 
+def test_project_checker_detect_routes_by_extension(als_file):
+    """Detect mode picks parse_als for a .als and renders + names the DAW."""
+    pytest.importorskip("PySide6")
+
+    from PySide6.QtWidgets import QApplication, QTabWidget
+    from cratedig.als.parser import parse_als
+    from cratedig.gui.als_explorer import AlsExplorerPanel
+
+    app = QApplication.instance() or QApplication([])
+
+    w = AlsExplorerPanel(detect=True)
+    w._load_file(str(als_file))
+
+    assert w._parser is parse_als
+    assert "Ableton Live" in w._title_lbl.text()
+    tab_widget = w.findChild(QTabWidget)
+    assert tab_widget is not None and tab_widget.count() == 4
+
+    w.close()
+
+
+def test_project_checker_detect_rejects_unknown_extension(tmp_path, monkeypatch):
+    """An unsupported extension is rejected without raising (warning path)."""
+    pytest.importorskip("PySide6")
+
+    from PySide6.QtWidgets import QApplication
+    from cratedig.gui import als_explorer
+    from cratedig.gui.als_explorer import AlsExplorerPanel
+
+    app = QApplication.instance() or QApplication([])
+    # Don't pop a real modal in the headless test.
+    monkeypatch.setattr(als_explorer.QMessageBox, "warning", lambda *a, **k: None)
+    bogus = tmp_path / "notes.txt"
+    bogus.write_text("not a project")
+
+    w = AlsExplorerPanel(detect=True)
+    assert w._resolve_detect(str(bogus)) is False
+    assert w._data is None  # nothing loaded
+
+    w.close()
+
+
 def test_main_window_has_stacked_pages(tmp_path):
-    """Smoke test: MainWindow embeds samples + ALS + Health + 8 DAW checkers as stacked pages."""
+    """Smoke test: MainWindow embeds samples + unified Project Checker + Health."""
     pytest.importorskip("PySide6")
 
     from PySide6.QtWidgets import QApplication, QStackedWidget
@@ -468,23 +510,20 @@ def test_main_window_has_stacked_pages(tmp_path):
 
     stack = w.findChild(QStackedWidget)
     assert stack is not None
-    # samples · Ableton · Health · Bitwig · Nuendo · Cubase · Reaper · FL · Studio One · Logic · Pro Tools
-    assert stack.count() == 11
+    # samples · Project Checker · Health
+    assert stack.count() == 3
     assert isinstance(stack.widget(1), AlsExplorerPanel)
     assert isinstance(stack.widget(2), HealthPanel)
-    assert all(isinstance(stack.widget(i), AlsExplorerPanel) for i in range(3, 11))
 
-    # Sidebar switches to the Ableton page.
-    w._nav_ableton.click()
+    # The Project Checker panel is in detect mode (one panel, all DAW formats).
+    assert w._project_checker._detect is True
+
+    # Sidebar switches to the Project Checker page.
+    w._nav_checker.click()
     assert stack.currentIndex() == 1
 
     # Sidebar switches to the Health page.
     w._nav_health.click()
     assert stack.currentIndex() == 2
-
-    # Each DAW nav button selects its stacked page (nav id == page index).
-    for offset, btn in enumerate(w._daw_nav_buttons):
-        btn.click()
-        assert stack.currentIndex() == 3 + offset
 
     w.close()

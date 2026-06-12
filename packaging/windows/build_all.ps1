@@ -39,7 +39,7 @@ if (-not $env:MINISIGN_PASSWORD -and (Test-Path $envFile)) {
 Write-Host "==> Python venv"
 if (-not (Test-Path .venv)) { python -m venv .venv }
 & .\.venv\Scripts\python.exe -m pip install -U pip
-& .\.venv\Scripts\pip.exe install -e ".[gui,analysis,download,metadata,build]"
+& .\.venv\Scripts\pip.exe install -e ".[gui,analysis,download,metadata,convert,build]"
 
 Write-Host "==> Bundled ffmpeg/ffplay check"
 $bin = Join-Path $Root "packaging\bin\windows"
@@ -88,6 +88,9 @@ $prev = Get-ChildItem $manifestDir -Filter "cratedig-*-win.json" |
     Sort-Object { [version]([regex]::Match($_.Name, 'cratedig-(.+)-win\.json').Groups[1].Value) } |
     Select-Object -Last 1
 
+# Auto-tier decides whether THIS release can also offer a delta. The full installer
+# is ALWAYS built (fresh installs + the client's fallback); a delta is built ALONGSIDE
+# it when the diff is code-only, so the client can pick it (delta-over-the-wire).
 $tier = "full"
 if ($prev) {
     $diff = & $py packaging\make_manifest.py diff $prev.FullName $newManifest
@@ -98,52 +101,70 @@ if ($Tier -ne "auto") {
     Write-Host "==> Tier override: auto=$tier -> $Tier"
     $tier = $Tier
 }
+$wantDelta = ($tier -eq "delta") -and $prev
 
-if ($tier -eq "delta") {
+# The full installer is always produced.
+Write-Host "==> Windows FULL installer (v$Version)"
+& $iscc "/DVersion=$Version" "packaging\windows\cratedig.iss"
+$full = "packaging\windows\Output\cratedig-setup-$Version.exe"
+$assets = @($full)
+
+# When the diff is code-only, also produce the small delta update installer.
+$delta = $null
+if ($wantDelta) {
     Write-Host "==> Windows DELTA update installer (v$Version)"
     $include = Join-Path $Root "packaging\windows\update-files.iss"
     & $py packaging\make_manifest.py build-win-include $prev.FullName $newManifest $include
     & $iscc "/DVersion=$Version" "packaging\windows\cratedig-update.iss"
-    $out = "packaging\windows\Output\cratedig-update-$Version.exe"
-} else {
-    Write-Host "==> Windows FULL installer (v$Version)"
-    & $iscc "/DVersion=$Version" "packaging\windows\cratedig.iss"
-    $out = "packaging\windows\Output\cratedig-setup-$Version.exe"
+    $delta = "packaging\windows\Output\cratedig-update-$Version.exe"
+    $assets += $delta
 }
 
+# Signed release-meta sidecar: tells the client which versions the delta applies onto
+# (empty delta_from when there's no delta -> client always falls back to full).
+Write-Host "==> Release meta (delta gate)"
+$meta = "packaging\windows\Output\release-meta-$Version.json"
+if ($wantDelta) {
+    & $py packaging\make_manifest.py emit-release-meta $newManifest $meta --old $prev.FullName
+} else {
+    & $py packaging\make_manifest.py emit-release-meta $newManifest $meta
+}
+$assets += $meta
+
 if ($Sign -or $Publish) {
-    Write-Host "==> Sign installer (minisign)"
+    Write-Host "==> Sign assets (minisign)"
     if (-not $env:MINISIGN_PASSWORD) {
         throw "Set `$env:MINISIGN_PASSWORD before signing (the minisign.key password)."
     }
     $key = Join-Path $Root "minisign.key"
     if (-not (Test-Path $key)) { throw "minisign.key not found at $key." }
-    $sig = "$out.minisig"
-    # minisign reads the key password from stdin; -t stamps a trusted comment.
-    $env:MINISIGN_PASSWORD | minisign -S -m $out -s $key -x $sig `
-        -c "cratedig $Version installer" -t "cratedig $Version"
-    if ($LASTEXITCODE -ne 0) { throw "minisign signing failed." }
-    Write-Host "    signed: $sig"
+    foreach ($a in $assets) {
+        # minisign reads the key password from stdin; -t stamps a trusted comment.
+        $env:MINISIGN_PASSWORD | minisign -S -m $a -s $key -x "$a.minisig" `
+            -c "cratedig $Version" -t "cratedig $Version"
+        if ($LASTEXITCODE -ne 0) { throw "minisign signing failed for $a." }
+        Write-Host "    signed: $a.minisig"
+    }
 }
 
 if ($Publish) {
     Write-Host "==> Publish to GitHub Releases (gh)"
     $tag = $Version
     $title = "CRATEDIG $Version"
-    # Create the release if absent, then upload the installer + signature.
     gh release view $tag 2>$null
     if ($LASTEXITCODE -ne 0) {
         gh release create $tag --title $title --notes "cratedig $Version (online-update baseline)."
         if ($LASTEXITCODE -ne 0) { throw "gh release create failed." }
     }
-    gh release upload $tag $out "$out.minisig" --clobber
+    $uploads = @()
+    foreach ($a in $assets) { $uploads += $a; $uploads += "$a.minisig" }
+    gh release upload $tag @uploads --clobber
     if ($LASTEXITCODE -ne 0) { throw "gh release upload failed." }
     Write-Host "    published $tag"
 }
 
 Write-Host ""
-Write-Host "Done ($tier):"
+Write-Host "Done (tier=$tier, delta=$([bool]$delta)):"
 Write-Host "  dist\cratedig\"
 Write-Host "  $newManifest"
-Write-Host "  $out"
-if ($Sign -or $Publish) { Write-Host "  $out.minisig" }
+foreach ($a in $assets) { Write-Host "  $a" }
