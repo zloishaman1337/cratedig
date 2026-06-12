@@ -88,12 +88,30 @@ def _build_icns(pngs: list[Path]) -> Path | None:
 
 
 def main() -> int:
+    # The committed .ico/.icns are deterministic brand assets that rarely change,
+    # but Qt's PNG encoder churns bytes each render -> spurious git diffs. Skip any
+    # output that already exists so builds reuse the committed file; pass --force to
+    # regenerate (e.g. after the brand mark changes).
+    force = "--force" in sys.argv[1:]
+    ico_dest = HERE / "cratedig.ico"
+    icns_dest = HERE / "cratedig.icns"
+    need_ico = force or not ico_dest.exists()
+    need_icns = force or not icns_dest.exists()
+    if not need_ico and not need_icns:
+        print(f"icons present, skipping render ({ico_dest.name}, {icns_dest.name}); use --force to regenerate")
+        return 0
+
     pngs = _render_pngs()
-    ico = _build_ico(pngs)
-    print(f"wrote {ico}")
-    icns = _build_icns(pngs)
-    if icns:
-        print(f"wrote {icns}")
+    if need_ico:
+        print(f"wrote {_build_ico(pngs)}")
+    else:
+        print(f"kept {ico_dest}")
+    if need_icns:
+        icns = _build_icns(pngs)
+        if icns:
+            print(f"wrote {icns}")
+    else:
+        print(f"kept {icns_dest}")
     return 0
 
 

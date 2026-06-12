@@ -65,9 +65,9 @@ fetches+verifies `release-meta-<ver>.json` and picks delta or full automatically
 |---|---|---|
 | Windows onedir build | ✅ DONE 0.6.0 | smoke-launched alive 8s, clean stop |
 | Windows installer | ✅ DONE 0.6.0 | `cratedig-setup-0.6.0.exe` (full, 169MB) + `cratedig-update-0.6.0.exe` (delta, 32MB) + `release-meta-0.6.0.json`; all signed+published; tier auto=delta; both shipped |
-| Release manifests | ✅ win 0.6.0 | `cratedig-0.6.0-win.json` committed; mac pending |
+| Release manifests | ✅ win+mac 0.6.0 | `cratedig-0.6.0-win.json` + `cratedig-0.6.0-mac.json` both committed |
 | Windows GitHub release | ✅ published 0.6.0 (signed) | https://github.com/zloishaman1337/cratedig/releases/tag/0.6.0 |
-| macOS `.app` + `.dmg` | ⏳ PENDING 0.6.0 | see macOS HANDOFF below |
+| macOS `.app` + `.dmg` | ✅ DONE 0.6.0 | cratedig-0.6.0.dmg (full, ~172MB) signed+published; aaf2 confirmed in app PYZ; smoke-launched alive 8s, clean stop |
 | GitHub Actions CI | ⏳ written, not run | `.github/workflows/release.yml` matrix; fires on tag |
 
 ## Gotchas
@@ -101,29 +101,24 @@ fetches+verifies `release-meta-<ver>.json` and picks delta or full automatically
 - **Large DAW test fixtures** (`projects/` — Logic ~82MB, Studio One ~75MB, Cubase ~11MB, flp/ptx/rpp) intentionally LEFT UNTRACKED; real-project tests are `skipif`-guarded on their presence.
 - **Logic AU plugin names truncated to 11 chars** in `ProjectData` reversed-4cc markers — inherent to source data, not a parser bug.
 - **Build venv is Python 3.13 on macOS** (confirmed 0.5.2 session).
+- **render_icons.py skips existing .ico/.icns** — committed icons are deterministic brand assets but Qt's PNG encoder churns bytes each render → git diffs. `main()` now skips any output that already exists (returns before importing Qt); pass `--force` to regenerate after the brand mark changes. Both build scripts call it unconditionally; the skip keeps committed `packaging/cratedig.{ico,icns}` stable.
+- **release-meta clobber pitfall (per-OS tiers differ):** `release-meta-<ver>.json` is a SINGLE OS-agnostic file `{version, delta_from}`; `choose_tier` gates delta by `current ∈ delta_from` AND a per-OS delta asset existing. When Windows ships a delta but macOS ships full, the mac session's `emit-release-meta` (no `--old`) writes `delta_from=[]` and `gh upload --clobber` overwrites the correct Windows meta. FIX for 0.6.0: re-emitted with `--old cratedig-0.5.2-win.json` → `delta_from=["0.5.2"]`, re-signed, re-uploaded (verified vs embedded pubkey). mac clients self-exclude via the missing mac delta asset. **TODO: make `build_all.sh` preserve the union of delta_from across OSes instead of clobbering.**
 
 ## Verification (0.6.0)
 - Full pytest: **980 passed, 1 failed** (pre-existing CRLF artifact — not a regression). +25 tests vs 0.5.2.
 - New test files: `tests/test_convert.py`, `tests/test_projects_fmt_detect.py`, `tests/test_updater_delta.py`. Extended: `test_als.py` (detect-mode routing, 3 stacked pages), `test_gui_logic.py` (crate re-click selection).
 - Frozen 0.6.0 smoke-launched OK. aaf2 confirmed inside `cratedig.exe` PYZ via archive_viewer. All 3 assets minisign-VERIFIED (trusted comment "cratedig 0.6.0").
 - Live feed: `fetch_latest_release()`→0.6.0; `is_newer(0.6.0,0.5.2)`=True; `select_asset(win,full)`+`select_asset(win,delta)` both resolve. Source commit `ac9d6b6` on main.
+- macOS 0.6.0: `dist/cratedig.app` smoke-launched (alive 8s, clean stop); aaf2 confirmed inside app PYZ via archive_viewer; `cratedig-0.6.0.dmg` + `release-meta-0.6.0.json` signed and published; published release-meta verified against embedded pubkey (`delta_from=["0.5.2"]`).
 
-## macOS HANDOFF — PENDING
-- version: 0.6.0
-- tier: full (build auto-tier will say delta since pyaaf2 rides in the app exe); ship full+delta+meta. 0.5.2 mac clients fetch the full .dmg.
-- windows update: DONE (`cratedig-setup-0.6.0.exe` + `cratedig-update-0.6.0.exe` + `release-meta-0.6.0.json`, signed+published)
-- macos update: PENDING
-- source ref: `ac9d6b6` (branch main)
-- changed files: see `git show ac9d6b6` — `cratedig/convert/**`, `cratedig/projects_fmt/detect.py`, `cratedig/gui/{als_explorer,convert_dialog,main_window,sample_table,update_check}.py`, `cratedig/updater.py`, `packaging/{cratedig.spec,make_manifest.py,macos/build_all.sh,windows/build_all.ps1}`, `pyproject.toml`, `tests/`
-- new deps/assets: `pyaaf2>=1.7` (new `[convert]` extra; pure-Python, bundles into the app via `collect_submodules('aaf2')` in `cratedig.spec` — `build_all.sh` already installs the convert extra)
-- build command: `bash packaging/macos/build_all.sh 0.6.0`
-- notes: `build_all.sh` now always builds the full .dmg AND a delta .zip (when code-only) + signs/publishes release-meta. After build: `SIGN=1 PUBLISH=1 bash packaging/macos/build_all.sh 0.6.0`. Verify aaf2 bundled into the .app. Smoke-launch the .app.
+## macOS HANDOFF — none
 
 ## Backlog
 - **0.4.0 distribute manually**: hand 0.4.0+ full installers to existing 0.2/0.3 users — they have no update checker.
 - Exercise CI workflow (`.github/workflows/release.yml`) end-to-end on a pushed `v*` tag.
 - Optional: Windows EV code-signing cert and macOS notarization (Apple Dev ID $99/yr).
 - Consider hnswlib ANN for large libraries (brute force fine at personal scale).
+- Fix release-meta clobber in build_all.sh (preserve cross-OS delta_from union) — see gotcha.
 
 ## Authoritative files
 - `ARCHITECTURE.md` — full design + roadmap
