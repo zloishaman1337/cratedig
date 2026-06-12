@@ -52,6 +52,29 @@ class TestToCheckerData:
         out = to_checker_data({"version": "v", "plugins": [], "samples": []}, tmp_path / "x")
         assert out["tracks"] == []
 
+    def test_bpm_builds_arrangement(self, tmp_path):
+        out = to_checker_data({"version": "v", "bpm": 140.0, "plugins": [], "samples": []},
+                              tmp_path / "x")
+        assert out["bpm"] == 140.0
+        assert out["arrangement"] is not None
+        assert out["arrangement"]["bpm"] == 140.0
+
+    def test_no_bpm_no_arrangement(self, tmp_path):
+        out = to_checker_data({"version": "v", "plugins": [], "samples": []}, tmp_path / "x")
+        assert out["bpm"] is None
+        assert out["arrangement"] is None
+
+    def test_rich_tracks_passed_through(self, tmp_path):
+        rich = [{"name": "Drums", "type": "audio", "instruments": ["Kontakt [AU]"], "plugins": []}]
+        out = to_checker_data({"version": "v", "plugins": ["x"], "samples": [], "tracks": rich},
+                              tmp_path / "x")
+        assert out["tracks"] == rich  # real tracks win over the synthetic "Project" track
+
+    def test_key_carried(self, tmp_path):
+        out = to_checker_data({"version": "v", "key": "D minor", "plugins": [], "samples": []},
+                              tmp_path / "x")
+        assert out["key"] == "D minor"
+
     def test_samples_resolved_found_and_missing(self, tmp_path):
         (tmp_path / "kick.wav").write_bytes(b"\0")
         proj = tmp_path / "song.bwproject"
@@ -100,7 +123,7 @@ class TestReusedPanel:
         assert panel.acceptDrops() is True
         panel.close()
 
-    def test_three_tabs_and_version(self, tmp_path):
+    def test_four_tabs_and_version(self, tmp_path):
         _app()
         from PySide6.QtWidgets import QTabWidget
 
@@ -108,7 +131,8 @@ class TestReusedPanel:
         panel._load_file(str(tmp_path / "x.bwproject"))
         assert panel._lbl_version.text() == "Bitwig 5.2.7"
         tabs = panel.findChild(QTabWidget)
-        assert tabs is not None and tabs.count() == 3
+        # Overview · Instruments · Plugins · Tracks
+        assert tabs is not None and tabs.count() == 4
         panel.close()
 
     def test_match_uses_sample_names(self, tmp_path):
@@ -147,6 +171,47 @@ class TestReusedPanel:
         panel = AlsExplorerPanel(parser=boom, normalizer=to_checker_data)
         panel._load_file(str(tmp_path / "x.bwproject"))
         assert panel._data is None
+        panel.close()
+
+
+class TestProjectHealth:
+    def test_clean_project_full_score(self, tmp_path):
+        _app()
+        (tmp_path / "kick.wav").write_bytes(b"\0")
+        from cratedig.gui.als_explorer import AlsExplorerPanel
+
+        raw = {"version": "v", "plugins": [], "samples": ["kick.wav"]}
+        panel = AlsExplorerPanel(parser=lambda p: raw, normalizer=to_checker_data)
+        panel._load_file(str(tmp_path / "x.bwproject"))
+        score, issues = panel._compute_health(panel._data)
+        assert score == 100 and issues == []
+        panel.close()
+
+    def test_missing_samples_dock_score(self, tmp_path):
+        _app()
+        from cratedig.gui.als_explorer import AlsExplorerPanel
+
+        raw = {"version": "v", "plugins": [], "samples": ["ghost.wav", "gone.wav"]}
+        panel = AlsExplorerPanel(parser=lambda p: raw, normalizer=to_checker_data)
+        panel._load_file(str(tmp_path / "x.bwproject"))
+        score, issues = panel._compute_health(panel._data)
+        from cratedig.gui.als_explorer import C_ERR
+        # 2 missing samples → error-severity issue, score docked (language-agnostic).
+        assert score < 100 and any(c == C_ERR for c, _t in issues)
+        panel.close()
+
+    def test_uninstalled_plugin_flagged(self, tmp_path):
+        _app()
+        from cratedig.gui.als_explorer import AlsExplorerPanel
+
+        raw = {"version": "v", "plugins": ["Sylenth1 [VST2]"], "samples": []}
+        panel = AlsExplorerPanel(parser=lambda p: raw, normalizer=to_checker_data,
+                                 bare_is_native=False)
+        panel.set_plugin_index(_index({"serum"}))  # Sylenth1 not installed
+        panel._load_file(str(tmp_path / "x.bwproject"))
+        score, issues = panel._compute_health(panel._data)
+        from cratedig.gui.als_explorer import C_ERR
+        assert score < 100 and any(c == C_ERR for c, _t in issues)
         panel.close()
 
 

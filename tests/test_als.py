@@ -428,7 +428,7 @@ def test_als_explorer_gui_acceptdrops(als_file):
 
 
 def test_als_explorer_gui_tab_count(als_file):
-    """Smoke test: After loading a file, panel has 3 tabs: Instruments / Plugins / Tracks."""
+    """Smoke test: After loading a file, panel has 4 tabs: Overview / Instruments / Plugins / Tracks."""
     pytest.importorskip("PySide6")
 
     from PySide6.QtWidgets import QApplication, QTabWidget
@@ -441,13 +441,13 @@ def test_als_explorer_gui_tab_count(als_file):
 
     tab_widget = w.findChild(QTabWidget)
     assert tab_widget is not None
-    assert tab_widget.count() == 3
+    assert tab_widget.count() == 4
 
     w.close()
 
 
 def test_main_window_has_stacked_pages(tmp_path):
-    """Smoke test: MainWindow embeds samples + ALS + Health + Bitwig + Nuendo as stacked pages."""
+    """Smoke test: MainWindow embeds samples + ALS + Health + 8 DAW checkers as stacked pages."""
     pytest.importorskip("PySide6")
 
     from PySide6.QtWidgets import QApplication, QStackedWidget
@@ -468,9 +468,11 @@ def test_main_window_has_stacked_pages(tmp_path):
 
     stack = w.findChild(QStackedWidget)
     assert stack is not None
-    assert stack.count() == 5  # samples · Ableton · Health · Bitwig · Nuendo
+    # samples · Ableton · Health · Bitwig · Nuendo · Cubase · Reaper · FL · Studio One · Logic · Pro Tools
+    assert stack.count() == 11
     assert isinstance(stack.widget(1), AlsExplorerPanel)
     assert isinstance(stack.widget(2), HealthPanel)
+    assert all(isinstance(stack.widget(i), AlsExplorerPanel) for i in range(3, 11))
 
     # Sidebar switches to the Ableton page.
     w._nav_ableton.click()
@@ -479,5 +481,10 @@ def test_main_window_has_stacked_pages(tmp_path):
     # Sidebar switches to the Health page.
     w._nav_health.click()
     assert stack.currentIndex() == 2
+
+    # Each DAW nav button selects its stacked page (nav id == page index).
+    for offset, btn in enumerate(w._daw_nav_buttons):
+        btn.click()
+        assert stack.currentIndex() == 3 + offset
 
     w.close()

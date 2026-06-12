@@ -9,6 +9,7 @@ Name" tags) and referenced sample files, which is what the project checker needs
 from __future__ import annotations
 
 import re
+import struct
 from pathlib import Path
 
 from .common import extract_sample_basenames, read_be_string, read_project_bytes
@@ -27,10 +28,32 @@ def parse_npr(path: str | Path) -> dict:
     return {
         "format": "nuendo",
         "version": _version(data),
+        "bpm": _tempo(data),
         "plugins": _plugins(data),
         "samples": extract_sample_basenames(data),
         "tracks": [],
     }
+
+
+def _tempo(data: bytes) -> float | None:
+    """Best-effort project tempo from the ``MTempoTrackEvent`` block.
+
+    Nuendo/Cubase store the initial tempo as a big-endian IEEE float a short
+    distance after the ``MTempoTrackEvent`` marker. Scan a bounded window for the
+    first plausible float.
+    """
+    i = data.find(b"MTempoTrackEvent")
+    if i < 0:
+        return None
+    window = data[i : i + 96]
+    for p in range(len(window) - 4):
+        try:
+            v = struct.unpack(">f", window[p : p + 4])[0]
+        except struct.error:
+            continue
+        if 20.0 <= v <= 500.0:
+            return round(v, 3)
+    return None
 
 
 def _version(data: bytes) -> str:

@@ -86,8 +86,11 @@ class TestNuendoReal:
 
     def test_shape(self):
         data = parse_npr(_NPR)
-        assert set(data) >= {"format", "version", "plugins", "samples", "tracks"}
+        assert set(data) >= {"format", "version", "plugins", "samples", "tracks", "bpm"}
         assert data["format"] == "nuendo"
+
+    def test_bpm_recovered(self):
+        assert parse_npr(_NPR)["bpm"] == 120.0
 
 
 @pytest.mark.skipif(not _BW.is_file(), reason="real Bitwig sample project not present")
@@ -108,3 +111,6 @@ class TestBitwigReal:
         data = parse_bwproject(_BW)
         assert len(data["samples"]) > 5
         assert data["plugin_state_count"] == 74
+
+    def test_bpm_recovered(self):
+        assert parse_bwproject(_BW)["bpm"] == 140.0

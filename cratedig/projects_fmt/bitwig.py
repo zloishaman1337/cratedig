@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import io
 import re
+import struct
 import zipfile
 from pathlib import Path
 
@@ -32,11 +33,36 @@ def parse_bwproject(path: str | Path) -> dict:
     return {
         "format": "bitwig",
         "version": _version(raw),
+        "bpm": _tempo(blob),
         "plugins": _plugins(blob),
         "samples": extract_sample_basenames(blob),
         "tracks": [],
         "plugin_state_count": _preset_count(raw, zip_at),
     }
+
+
+def _tempo(blob: bytes) -> float | None:
+    """Best-effort project tempo from the ``TEMPO`` automation block.
+
+    Bitwig stores the transport tempo as a big-endian IEEE double tagged ``0x07``
+    a short distance after the ``TEMPO`` key (``0x08``-tagged doubles nearby are the
+    automation min/max range, not the value). Scan a bounded window for the first
+    plausible ``0x07`` double.
+    """
+    i = blob.find(b"TEMPO")
+    if i < 0:
+        return None
+    window = blob[i + 5 : i + 5 + 256]
+    for p in range(len(window) - 9):
+        if window[p] != 0x07:
+            continue
+        try:
+            v = struct.unpack(">d", window[p + 1 : p + 9])[0]
+        except struct.error:
+            continue
+        if 20.0 <= v <= 500.0:
+            return round(v, 3)
+    return None
 
 
 def _version(raw: bytes) -> str:

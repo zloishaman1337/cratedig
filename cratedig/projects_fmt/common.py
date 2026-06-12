@@ -48,6 +48,17 @@ def extract_sample_basenames(data: bytes) -> list[str]:
     return sorted(found, key=str.lower)
 
 
+def iter_printable_runs(data: bytes, min_len: int = 4):
+    """Yield decoded printable-ASCII runs (length ≥ ``min_len``) from a blob.
+
+    Shared by the best-effort binary scanners (FL Studio / Pro Tools / Logic) that
+    recover plugin/sample names from embedded strings rather than a parsed tree.
+    """
+    pat = re.compile(rb"[ -~]{%d,}" % max(min_len, 1))
+    for run in pat.finditer(data):
+        yield run.group().decode("latin1")
+
+
 def resolve_samples_on_disk(
     basenames: list[str], project_path: str | Path, *, max_files: int = 20_000
 ) -> dict:
@@ -58,7 +69,10 @@ def resolve_samples_on_disk(
     (recursively, bounded by ``max_files`` to keep a hostile/huge tree cheap).
     Returns ``{"found": [...], "missing": [...]}`` in the input order.
     """
-    base = Path(project_path).resolve().parent
+    p = Path(project_path).resolve()
+    # Bundle formats (Logic .logicx) hand us the package directory itself; scan it.
+    # File formats hand us a file; scan the folder it lives in.
+    base = p if p.is_dir() else p.parent
     present: set[str] = set()
     if base.is_dir():
         seen = 0
@@ -73,24 +87,52 @@ def resolve_samples_on_disk(
     return {"found": found, "missing": missing}
 
 
-def to_checker_data(data: dict, project_path: str | Path) -> dict:
-    """Adapt a binary-parser result to the rich schema the project-checker panel uses.
+def _arrangement_from(bpm, length: str) -> dict | None:
+    """Synthesise the panel's ``arrangement`` dict from a best-effort bpm/length.
 
-    Binary formats (Bitwig/Nuendo) yield a flat ``{version, plugins, samples, tracks}``;
-    the panel (shared with the Ableton checker) expects ``main``/``arrangement``/
-    ``tracks``/``samples{found,missing}``. Plugins are hung on one synthetic "Project"
-    track so they surface in the Plugins tab; fader/arrangement are unavailable here.
+    The panel renders BPM/Length from this block; binary formats rarely expose a
+    bar count, so ``bars`` stays 0 and ``time_str`` defaults to ``0:00`` when only
+    a tempo is known.
     """
+    if bpm is None and not length:
+        return None
+    return {
+        "beats": 0.0,
+        "bars": 0.0,
+        "time_str": length or "0:00.00",
+        "bpm": round(bpm, 2) if isinstance(bpm, (int, float)) else (bpm or "—"),
+    }
+
+
+def to_checker_data(data: dict, project_path: str | Path) -> dict:
+    """Adapt a flat parser result to the rich schema the project-checker panel uses.
+
+    Binary/best-effort formats yield a flat ``{version, plugins, samples, tracks,
+    bpm?, length?, key?}``; the panel (shared with the Ableton checker) expects
+    ``main``/``arrangement``/``tracks``/``samples{found,missing}``.
+
+    Rich tracks (a non-empty ``tracks`` list of dicts, e.g. from the Reaper/Studio
+    One parsers) are passed through unchanged so the Instruments/Plugins/Tracks tabs
+    show the real per-track layout. Otherwise plugins are hung on one synthetic
+    "Project" track so they still surface in the Plugins tab.
+    """
+    raw_tracks = data.get("tracks") or []
     plugins = list(data.get("plugins", []))
-    tracks: list[dict] = []
-    if plugins:
+    if raw_tracks and all(isinstance(t, dict) for t in raw_tracks):
+        tracks = raw_tracks
+    elif plugins:
         tracks = [{"name": "Project", "type": "audio", "instruments": [], "plugins": plugins}]
+    else:
+        tracks = []
     version = data.get("version", "")
     return {
         "ableton_version": version,
         "version": version,
         "main": {"fader_db": None, "fader_above_0db": False, "plugins": [], "instruments": []},
-        "arrangement": None,
+        "arrangement": _arrangement_from(data.get("bpm"), data.get("length", "")),
+        "bpm": data.get("bpm"),
+        "length": data.get("length", ""),
+        "key": data.get("key", ""),
         "tracks": tracks,
         "samples": resolve_samples_on_disk(list(data.get("samples", [])), project_path),
     }

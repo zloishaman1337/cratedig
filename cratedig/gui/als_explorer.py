@@ -40,6 +40,7 @@ C_LABEL  = MUTED
 C_VALUE  = ""
 C_HEADER = ""
 C_VST    = WARN
+C_WARN   = WARN
 C_M4L    = PINK
 C_SILENT = "#6d7f95"
 C_BG_CARD = "rgba(103,213,255,0.06)"
@@ -78,6 +79,22 @@ _STRINGS: dict[str, dict[str, str]] = {
         "third_party":         "Сторонних плагинов:",
         "samples_none":        "✓  Семплы не используются",
         "empty_list":          "Нет",
+        "bpm":                 "Темп:",
+        "key":                 "Тональность:",
+        "tab_overview":        "Обзор",
+        "health_title":        "ЗДОРОВЬЕ ПРОЕКТА",
+        "health_ok":           "✓  Проблем не найдено",
+        "health_score":        "Оценка:",
+        "ov_format":           "Формат:",
+        "ov_version":          "Версия:",
+        "ov_tracks":           "Дорожек:",
+        "ov_instruments":      "Инструментов:",
+        "ov_plugins":          "Плагинов:",
+        "ov_samples":          "Семплов:",
+        "iss_samples":         "семплов отсутствует в папке проекта",
+        "iss_plugins":         "сторонних плагинов не установлено",
+        "iss_fader":           "фейдер Main выше 0 dB (риск клиппинга)",
+        "iss_no_samples":      "ссылок на семплы не найдено",
     },
     "en": {
         "btn_open":            "Open project",
@@ -100,6 +117,22 @@ _STRINGS: dict[str, dict[str, str]] = {
         "third_party":         "3rd-party plugins:",
         "samples_none":        "✓  No samples used",
         "empty_list":          "None",
+        "bpm":                 "Tempo:",
+        "key":                 "Key:",
+        "tab_overview":        "Overview",
+        "health_title":        "PROJECT HEALTH",
+        "health_ok":           "✓  No issues found",
+        "health_score":        "Score:",
+        "ov_format":           "Format:",
+        "ov_version":          "Version:",
+        "ov_tracks":           "Tracks:",
+        "ov_instruments":      "Instruments:",
+        "ov_plugins":          "Plugins:",
+        "ov_samples":          "Samples:",
+        "iss_samples":         "samples missing from project folder",
+        "iss_plugins":         "3rd-party plugins not installed",
+        "iss_fader":           "Main fader above 0 dB (clipping risk)",
+        "iss_no_samples":      "no sample references found",
     },
 }
 
@@ -140,6 +173,46 @@ def _samples_ok(total: int) -> str:
     if _LANG == "ru":
         return f"✓  Все семплы в папке проекта  ({total})"
     return f"✓  All samples in project folder  ({total})"
+
+
+def _bpm_str(data: dict) -> str:
+    """Tempo for display, sourced from an explicit ``bpm`` or the arrangement."""
+    bpm = data.get("bpm")
+    if bpm is None:
+        arr = data.get("arrangement")
+        bpm = arr.get("bpm") if arr else None
+    if bpm in (None, ""):
+        return "—"
+    if isinstance(bpm, (int, float)):
+        return f"{bpm:g} BPM"
+    return str(bpm)
+
+
+def _length_str(data: dict) -> str:
+    """Project length for display, from the arrangement bar/time data or fallback."""
+    arr = data.get("arrangement")
+    if arr and arr.get("bars"):
+        return _arr_str(arr)
+    return data.get("length") or "—"
+
+
+def _count_third_party(data: dict) -> int:
+    seen: set[str] = set()
+    for src in data.get("tracks", []) + [data.get("main", {})]:
+        for name in src.get("instruments", []) + src.get("plugins", []):
+            if name.endswith(_THIRD_PARTY_SUFFIXES):
+                seen.add(name)
+    return len(seen)
+
+
+def _count_devices(data: dict) -> tuple[int, int]:
+    """(unique instruments, unique plugins) across all tracks + main."""
+    instr: set[str] = set()
+    plug: set[str] = set()
+    for src in data.get("tracks", []) + [data.get("main", {})]:
+        instr.update(src.get("instruments", []))
+        plug.update(src.get("plugins", []))
+    return len(instr), len(plug)
 
 
 
@@ -631,6 +704,7 @@ class AlsExplorerPanel(QWidget):
         # Rebuild tabs
         self._tabs.clear()
         self._match_tab = None
+        self._tabs.addTab(self._build_overview_tab(data),              T("tab_overview"))
         self._tabs.addTab(self._build_tab_widget(data, "instruments"), T("tab_instruments"))
         self._tabs.addTab(self._build_tab_widget(data, "plugins"),     T("tab_plugins"))
         self._tabs.addTab(self._build_tab_widget(data, "tracks"),      T("tab_tracks"))
@@ -672,22 +746,23 @@ class AlsExplorerPanel(QWidget):
 
         pad_layout.addWidget(main_card)
 
-        # Summary bar: count unique third-party plugin entries (VST2/VST3/AU)
-        vst_all: set[str] = set()
-        for src in data["tracks"] + [main]:
-            for name in src.get("instruments", []) + src.get("plugins", []):
-                if name.endswith(("[VST2]", "[VST3]", "[AU]")):
-                    vst_all.add(name)
+        # Summary bar: tempo / key / length / 3rd-party count. Key is only shown
+        # when a format actually reports it (Logic), so it doesn't clutter others.
+        summary_cols = [
+            (T("bpm"),    _bpm_str(data)),
+            (T("length"), _length_str(data)),
+            (T("third_party"), str(_count_third_party(data))),
+        ]
+        key_val = data.get("key", "")
+        if key_val:
+            summary_cols.insert(1, (T("key"), key_val))
 
         summary_card = _card_frame("rgba(46,158,79,0.13)")
         sc_layout = QHBoxLayout(summary_card)
         sc_layout.setContentsMargins(12, 8, 12, 8)
         sc_layout.setSpacing(0)
 
-        for label_text, val_text in [
-            (T("length"),      _arr_str(data.get("arrangement"))),
-            (T("third_party"), str(len(vst_all))),
-        ]:
+        for label_text, val_text in summary_cols:
             col_widget = QWidget()
             col_widget.setStyleSheet("background: transparent;")
             col_layout = QVBoxLayout(col_widget)
@@ -700,6 +775,10 @@ class AlsExplorerPanel(QWidget):
 
         pad_layout.addWidget(summary_card)
 
+        # Project Health card (scores the loaded project's missing samples /
+        # uninstalled plugins / clipping risk).
+        pad_layout.addWidget(self._build_health_card(data))
+
         # Samples expandable
         samples_widget = ExpandableSamples(data.get("samples", {}))
         pad_layout.addWidget(samples_widget)
@@ -708,6 +787,74 @@ class AlsExplorerPanel(QWidget):
         wrapper.setLayout(pad_layout)
         self._info_area_layout.addWidget(wrapper)
         self._info_area_layout.addStretch()
+
+    # ── Project Health ──────────────────────────────────────────────────────────
+
+    def _compute_health(self, data: dict) -> tuple[int, list[tuple[str, str]]]:
+        """Return (score 0-100, [(severity_color, issue_text), ...]).
+
+        Scores the loaded project on the checks the panel can actually verify:
+        missing samples, uninstalled 3rd-party plugins (once a scan exists) and a
+        Main fader pushed above 0 dB.
+        """
+        issues: list[tuple[str, str]] = []
+        score = 100
+
+        samples = data.get("samples", {})
+        found = len(samples.get("found", []))
+        missing = len(samples.get("missing", []))
+        if missing:
+            issues.append((C_ERR, f"{missing} {T('iss_samples')}"))
+            score -= min(40, missing * 5)
+        elif found == 0:
+            issues.append((C_MUTED, T("iss_no_samples")))
+
+        # Uninstalled 3rd-party plugins (only meaningful once an index is present).
+        if self._plugin_index is not None:
+            uninstalled = 0
+            for src in data.get("tracks", []) + [data.get("main", {})]:
+                for name in src.get("instruments", []) + src.get("plugins", []):
+                    badge = self._plugin_badge(name, self._plugin_index, self._bare_is_native)
+                    if badge is not None and badge[0] == "✗":
+                        uninstalled += 1
+            if uninstalled:
+                issues.append((C_ERR, f"{uninstalled} {T('iss_plugins')}"))
+                score -= min(40, uninstalled * 8)
+
+        if data.get("main", {}).get("fader_above_0db"):
+            issues.append((C_WARN, T("iss_fader")))
+            score -= 15
+
+        return max(0, score), issues
+
+    def _build_health_card(self, data: dict) -> QWidget:
+        score, issues = self._compute_health(data)
+        bg = "rgba(46,158,79,0.13)" if not issues else (
+            "rgba(216,54,47,0.13)" if any(c == C_ERR for c, _ in issues) else "rgba(230,170,40,0.13)"
+        )
+        card = _card_frame(bg)
+        layout = QVBoxLayout(card)
+        layout.setContentsMargins(12, 10, 12, 10)
+        layout.setSpacing(2)
+
+        header = QWidget()
+        header.setStyleSheet("background: transparent;")
+        hl = QHBoxLayout(header)
+        hl.setContentsMargins(0, 0, 0, 0)
+        hl.setSpacing(8)
+        hl.addWidget(_colored_label(T("health_title"), C_HEADER, bold=True, font_size=13))
+        score_col = C_OK if score >= 85 else (C_WARN if score >= 60 else C_ERR)
+        hl.addWidget(_colored_label(f"{T('health_score')} {score}/100", score_col, bold=True, font_size=13))
+        hl.addStretch()
+        layout.addWidget(header)
+
+        if not issues:
+            layout.addWidget(_colored_label(T("health_ok"), C_OK))
+        else:
+            for color, text in issues:
+                glyph = "⚠" if color == C_WARN else ("•" if color == C_MUTED else "✗")
+                layout.addWidget(_colored_label(f"  {glyph}  {text}", color))
+        return card
 
     @staticmethod
     def _kv_row(key: str, value: str, value_color: str) -> QWidget:
@@ -724,6 +871,56 @@ class AlsExplorerPanel(QWidget):
         return row
 
     # ── Tab builders ───────────────────────────────────────────────────────────
+
+    def _build_overview_tab(self, data: dict) -> QWidget:
+        """A compact stats sheet: format/version/tempo/key/length + device + sample counts."""
+        tab = QWidget()
+        layout = QVBoxLayout(tab)
+        layout.setContentsMargins(0, 0, 0, 0)
+        layout.setSpacing(0)
+
+        scroll = QScrollArea()
+        scroll.setWidgetResizable(True)
+        scroll.setStyleSheet("background: transparent; border: none;")
+        scroll.setHorizontalScrollBarPolicy(Qt.ScrollBarPolicy.ScrollBarAlwaysOff)
+
+        inner = QWidget()
+        inner.setStyleSheet("background: transparent;")
+        il = QVBoxLayout(inner)
+        il.setContentsMargins(12, 8, 12, 8)
+        il.setSpacing(2)
+
+        n_instr, n_plug = _count_devices(data)
+        track_count = data.get("track_count")
+        if not isinstance(track_count, int):
+            track_count = len(data.get("tracks", []))
+        samples = data.get("samples", {})
+        n_found = len(samples.get("found", []))
+        n_missing = len(samples.get("missing", []))
+        sample_txt = f"{n_found + n_missing}" + (f"  ({n_missing} ✗)" if n_missing else "")
+
+        rows = [
+            (T("ov_format"),      str(data.get("format", "") or "—")),
+            (T("ov_version"),     data.get("version") or data.get("ableton_version") or "—"),
+            (T("bpm"),            _bpm_str(data)),
+            (T("length"),         _length_str(data)),
+        ]
+        if data.get("key"):
+            rows.append((T("key"), data["key"]))
+        rows += [
+            (T("ov_tracks"),      str(track_count)),
+            (T("ov_instruments"), str(n_instr)),
+            (T("ov_plugins"),     str(n_plug)),
+            (T("third_party"),    str(_count_third_party(data))),
+            (T("ov_samples"),     sample_txt),
+        ]
+        for k, v in rows:
+            il.addWidget(self._kv_row(k, v, C_VALUE))
+        il.addStretch()
+
+        scroll.setWidget(inner)
+        layout.addWidget(scroll, stretch=1)
+        return tab
 
     def _build_tab_widget(self, data: dict, mode: str) -> QWidget:
         tab = QWidget()
