@@ -62,9 +62,9 @@ sessions skip the release stage entirely.
 |---|---|---|
 | Windows onedir build | ✅ DONE 0.5.2 | `dist/cratedig/`; smoke-launched alive 8s clean stop |
 | Windows installer | ✅ DONE 0.5.2 | `cratedig-setup-0.5.2.exe` signed; tier=FULL (delta removed from release) |
-| Release manifests | ✅ win 0.5.2 | `cratedig-0.5.2-win.json` committed (808 files); mac pending |
+| Release manifests | ✅ win+mac 0.5.2 | `cratedig-0.5.2-win.json` (808 files) + `cratedig-0.5.2-mac.json` committed (commit 29472c8) |
 | Windows GitHub release | ✅ published 0.5.2 (signed) | `cratedig-setup-0.5.2.exe` + `.minisig` verified; https://github.com/zloishaman1337/cratedig/releases/tag/0.5.2 |
-| macOS `.app` + `.dmg` | ⏳ PENDING 0.5.2 | see macOS HANDOFF block below |
+| macOS `.app` + `.dmg` | ✅ DONE 0.5.2 | `cratedig-0.5.2.dmg` (~172 MB) signed, smoke-launched alive 8s, published to GitHub release 0.5.2 |
 | GitHub Actions CI | ⏳ written, not run | `.github/workflows/release.yml` matrix; fires on tag |
 
 ## Gotchas
@@ -98,24 +98,20 @@ sessions skip the release stage entirely.
 - **Large DAW test fixtures** (`projects/` — Logic ~82MB, Studio One ~75MB, Cubase ~11MB, flp/ptx/rpp) intentionally LEFT UNTRACKED; real-project tests are `skipif`-guarded on their presence. Original fixtures (`Changes.npr`, `Surface Tension.bwproject`) remain tracked.
 - **Logic AU plugin names truncated to 11 chars** in `ProjectData` reversed-4cc markers — this is inherent to the source data, not a parser bug.
 - **onedir code-only release → auto-tier picks DELTA** (only `cratedig.exe`+`base_library.zip` change); but client still fetches FULL — always build full via ISCC on `cratedig.iss`, sign, delete delta assets from the release.
+- **Build venv is Python 3.13 on macOS** (confirmed 0.5.2 session).
 
 ## Verification (0.5.2)
 - Full pytest: **955 passed, 1 failed** (pre-existing CRLF artifact — not a regression).
 - +28 new tests vs 0.5.1 (927→955). New test files: `tests/test_projects_fmt_reaper.py`, `_flstudio.py`, `_studioone.py`, `_logic.py`, `_protools.py`. Extended: `test_projects_fmt.py` (bitwig/nuendo bpm), `test_project_checker.py` (bpm/length/key carry, rich-tracks passthrough, Project Health), `test_als.py` (4 tabs; 11 stacked pages + per-DAW nav).
 - Frozen `dist\cratedig\cratedig.exe` (0.5.2) smoke-launched — alive 8s, clean stop.
 - `cratedig-setup-0.5.2.exe` minisign VERIFIED (trusted comment "cratedig 0.5.2").
+- `cratedig-0.5.2.dmg` (~172 MB) minisign VERIFIED (key id 54F217219B866BE6, trusted comment "cratedig 0.5.2"); `dist/cratedig.app` smoke-launched — alive 8s, clean stop.
 - Live feed: `fetch_latest_release()`→0.5.2; `is_newer(0.5.2,0.5.1)`=True; `select_asset(win,full)`→cratedig-setup-0.5.2.exe.
+- **Release 0.5.2 complete**: all 4 assets published — `cratedig-setup-0.5.2.exe` + `.minisig` (Windows), `cratedig-0.5.2.dmg` + `.minisig` (macOS).
 
-## macOS HANDOFF — PENDING
-- version: 0.5.2
-- tier: full   # client still fetches the full asset; macOS diff is authoritative (§3)
-- windows update: DONE (cratedig-setup-0.5.2.exe, signed+published)
-- macos update: PENDING
-- source ref: 6b3b147 (branch main)
-- changed files: see git show 6b3b147 — cratedig/projects_fmt/{common,bitwig,nuendo,reaper,flstudio,studioone,logic,protools}.py, cratedig/gui/{als_explorer,main_window}.py, tests, pyproject.toml, cratedig/__init__.py
-- new deps/assets: none (stdlib-only parsers; build_all.sh fetches nothing beyond ffmpeg/ffplay/minisign)
-- build command: bash packaging/macos/build_all.sh 0.5.2
-- notes: code-only change → macOS auto-tier will say delta; ship FULL .dmg anyway (same client-requests-full reason as Windows). After build: SIGN=1 PUBLISH=1 bash packaging/macos/build_all.sh 0.5.2, then if it produced a delta .zip swap it for the .dmg on the 0.5.2 release.
+## macOS HANDOFF — none
+
+Both Windows and macOS 0.5.2 shipped. No release mid-flight.
 
 ## Backlog
 - **0.4.0 distribute manually**: hand 0.4.0+ full installers to existing 0.2/0.3 users — they have no update checker.
